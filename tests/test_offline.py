@@ -3,6 +3,10 @@
   python -m unittest discover -s tests -v
 """
 import contextlib
+import hashlib
+import hmac
+import shutil
+import tempfile
 import io
 import os
 import struct
@@ -18,6 +22,7 @@ import game            # noqa: E402
 import memscan         # noqa: E402
 import offsets         # noqa: E402
 import player          # noqa: E402
+import save            # noqa: E402
 import session         # noqa: E402
 import trainer         # noqa: E402
 import verify_layout   # noqa: E402
@@ -354,6 +359,91 @@ class SessionTest(unittest.TestCase):
                 s.locate()
         close.assert_called_once_with(7)
         self.assertFalse(s.connected)
+
+
+PLAIN = "\n".join([
+    "pick|2|1|0|elwynn|Timothy|2,10,11,2,0|2", "perk|banish:3,rerolls:3", "pets|doomguard",
+    "resets|2", "hero|2|1|0|2,10,11,2,0", "marks|2|1440", "marks|5|30"])
+KEY = bytes(range(1, 43)) + bytes(6)        # 42-byte key, zero-padded like the exe's block
+NONCE = bytes(range(100, 116))
+
+
+class SaveCodecTest(unittest.TestCase):
+    def test_round_trip_and_tag(self):
+        text = save.encode(KEY, NONCE, PLAIN)
+        self.assertTrue(text.startswith("RSE1:"))
+        self.assertEqual(save.decode(KEY, text), (NONCE, PLAIN))
+        # the documented construction, spelled out independently
+        raw = save.base64.b64decode(text[5:])
+        ct = raw[16:-20]
+        self.assertEqual(raw[-20:], hmac.new(KEY, b"tag" + NONCE + ct, hashlib.sha1).digest())
+        ks0 = hmac.new(KEY, b"ks" + NONCE + (0).to_bytes(8, "little"), hashlib.sha1).digest()
+        self.assertEqual(bytes(c ^ k for c, k in zip(ct[:20], ks0)), PLAIN.encode()[:20])
+
+    def test_wrong_key_or_damage_is_refused(self):
+        text = save.encode(KEY, NONCE, PLAIN)
+        with self.assertRaises(save.SaveError):
+            save.decode(bytes(48), text)
+        raw = bytearray(save.base64.b64decode(text[5:]))
+        raw[30] ^= 1
+        with self.assertRaises(save.SaveError):
+            save.decode(KEY, "RSE1:" + save.base64.b64encode(bytes(raw)).decode())
+        with self.assertRaises(save.SaveError):
+            save.decode(KEY, "not a save")
+
+    def test_key_found_from_ipad_opad_blocks(self):
+        noise = bytes((i * 37 + 11) % 251 for i in range(4096))
+        blob = noise[:0x830] + bytes(b ^ 0x36 for b in KEY) + bytes(b ^ 0x5C for b in KEY) + noise
+        self.assertEqual(save.key_candidates(blob), [KEY])
+        self.assertEqual(save.key_candidates(noise), [])
+
+
+class SaveEditTest(unittest.TestCase):
+    def test_resets(self):
+        lines = save.lines_of(PLAIN)
+        self.assertNotIn("resets|2", save.set_resets(lines, 0))           # 0: line dropped
+        self.assertIn("resets|1", save.set_resets(lines, 1))
+        dropped = save.set_resets(lines, 0)
+        again = save.set_resets(dropped, 2)
+        self.assertEqual(again.index("resets|2"), again.index("pets|doomguard") + 1)
+        with self.assertRaises(save.SaveError):
+            save.set_resets(lines, -1)
+
+    def test_marks_are_stored_in_tenths_per_class(self):
+        lines = save.lines_of(PLAIN)
+        self.assertEqual(save.current_class(lines), 2)
+        self.assertEqual(save.marks_of(lines, 2), 144.0)
+        out = save.set_marks(lines, 2, 9999.9)
+        self.assertIn("marks|2|99999", out)
+        self.assertIn("marks|5|30", out)                                    # other class kept
+        self.assertEqual(save.changes(PLAIN, "\n".join(out)), ["-marks|2|1440", "+marks|2|99999"])
+        self.assertIn("marks|8|50", save.set_marks(lines, 8, 5))            # new class: added
+        with self.assertRaises(save.SaveError):
+            save.set_marks(lines, 2, -1)
+
+    def test_write_checked_backs_up_and_verifies(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder)
+        path = os.path.join(folder, "characters.txt")
+        with open(path, "w", newline="") as f:
+            f.write(save.encode(KEY, NONCE, PLAIN))
+        new = "\n".join(save.set_marks(save.lines_of(PLAIN), 2, 5))
+        backup = save.write_checked(KEY, path, NONCE, PLAIN, new)
+        self.assertEqual(save.decode(KEY, save.read_text(path))[1], new)
+        self.assertEqual(save.decode(KEY, save.read_text(backup))[1], PLAIN)
+
+    def test_refuses_to_write_while_the_game_runs(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder)
+        path = os.path.join(folder, "characters.txt")
+        original = save.encode(KEY, NONCE, PLAIN)
+        with open(path, "w", newline="") as f:
+            f.write(original)
+        with mock.patch.object(sys, "argv", ["save.py", "--file", path, "--resets", "0"]),                 mock.patch.object(save, "find_key", return_value=KEY),                 mock.patch.object(game, "find_pid", return_value=1234),                 contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                save.main()
+        self.assertEqual(save.read_text(path), original)
+        self.assertFalse(os.path.exists(os.path.join(folder, save.BACKUP_DIR)))
 
 
 if __name__ == "__main__":
