@@ -280,7 +280,7 @@ class SavePanel:
         self.cls = ttk.Combobox(f, state="readonly", width=12)
         self.cls.grid(row=2, column=1, sticky="w", pady=(4, 0))
         self.cls.bind("<<ComboboxSelected>>", lambda _e: self.show_marks())
-        self.marks_cur = ttk.Label(f, text="-", width=10, anchor="e")
+        self.marks_cur = ttk.Label(f, text="-", width=14, anchor="e")
         self.marks_cur.grid(row=2, column=2, sticky="e", padx=(0, 8), pady=(4, 0))
         self.marks_entry = ttk.Entry(f, width=10)
         self.marks_entry.grid(row=2, column=3, pady=(4, 0))
@@ -337,7 +337,8 @@ class SavePanel:
             current = save.current_class(lines)
         except save.SaveError:
             current = None
-        self.classes = sorted(set(marks) | ({current} if current else set()))
+        # every class, plus any id the save has that we don't know a name for
+        self.classes = sorted(set(save.CLASS_NAMES) | set(marks) | ({current} if current else set()))
         self.cls.configure(values=[f"{save.CLASS_NAMES.get(c, '职业')} ({c})" for c in self.classes])
         if self.classes and self.cls.current() < 0:
             self.cls.current(self.classes.index(current) if current in self.classes else 0)
@@ -350,7 +351,7 @@ class SavePanel:
             self.marks_cur.configure(text="-")
             return
         v = save.all_marks(self.sv.lines).get(self.classes[i])
-        self.marks_cur.configure(text="-" if v is None else f"{v:.1f}")
+        self.marks_cur.configure(text="0.0（无记录）" if v is None else f"{v:.1f}")
 
     # --- game running? ----------------------------------------------------
     def tick(self):
