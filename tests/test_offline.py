@@ -256,6 +256,12 @@ class OffsetsTest(unittest.TestCase):
         self.assertLessEqual(set(offsets.STAT_RANGES), set(offsets.STAT))
         self.assertLessEqual(set(offsets.PLAYER_FINGERPRINT), set(offsets.STAT_RANGES))
         self.assertTrue(set(offsets.STAT_TAIL).isdisjoint(offsets.STAT))
+        self.assertLessEqual(offsets.PLAYER_UNVERIFIED, set(offsets.PLAYER))
+
+    def test_current_version_is_tried_first(self):
+        # verify_layout.py reports the FIRST layout that fits; identical layouts
+        # (1115 == 1039 == 1036) must name the build we actually target.
+        self.assertEqual(next(iter(offsets.STAT_LAYOUTS)), offsets.GAME_VERSION)
 
     def test_matches_docs(self):
         # docs/OFFSETS.md: object + 0x5F4 = stat block, luck @ 0x624, gold mult @ 0x628
