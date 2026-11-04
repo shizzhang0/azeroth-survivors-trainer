@@ -4,6 +4,10 @@
   python trainer.py --set dmg=4.0 --set crit=1.0 --set hp=5000
   python trainer.py --pin dmg=4.0 --pin spd=2.0      # keep re-applying
 
+Before anything is written the trainer sweeps game memory twice (HUD, then the
+stat block), 30-90 s, printing progress. Pinning starts at the
+"pinning every ... s" line and lasts while the window stays open.
+
 Offsets live in offsets.py and were confirmed by writing distinct values into
 the live struct and reading them back on the character pane (Character -> Run
 Stats). While pinning, every target is re-validated before each write and
@@ -23,6 +27,9 @@ FIELDS = {**STAT, **STAT_TAIL}
 SPAN = max(FIELDS.values()) // 4 + 1        # floats per stat block (incl. tail)
 SHOWN = ("hp", "dmg", "cd", "crit", "spd", "pick", "xp", "gold", "arm", "luck")
 MAX_MISSES = 3          # consecutive failed re-validations before a target is dropped
+# The game recomputes the block every 1-3 s. Measured on v1118: at 0.25 s the
+# panel flickered back to the real value for up to 168 ms; at 0.02 s, <= 22 ms.
+PIN_INTERVAL = 0.02
 
 
 def stat_checks(hp_hint=None, skip=()):
@@ -104,9 +111,10 @@ def show(h, copies):
 def pin(h, copies, pins, interval, skip):
     checks = stat_checks(None, skip)
     misses = dict.fromkeys(copies, 0)
-    print("pinning (ctrl+c to stop):")
+    print(f"pinning every {interval:g} s (ctrl+c to stop):")
     for k, _off, data in pins:
         print(f"  {k} -> {float(np.frombuffer(data, np.float32)[0]):g}")
+    sys.stdout.flush()
     try:
         while True:
             for c in list(misses):
@@ -133,7 +141,8 @@ def main():
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--set", action="append", default=[], metavar="FIELD=VALUE")
     ap.add_argument("--pin", action="append", default=[], metavar="FIELD=VALUE")
-    ap.add_argument("--interval", type=float, default=0.25)
+    ap.add_argument("--interval", type=float, default=PIN_INTERVAL,
+                    help=f"seconds between pin writes (default {PIN_INTERVAL})")
     args = ap.parse_args()
 
     sets, pins = parse_specs(args.set), parse_specs(args.pin)
@@ -143,12 +152,14 @@ def main():
 
     h = memscan.open_process(pid, write=bool(sets or pins))
     try:
+        print(f"pid {pid}: reading the HUD (memory sweep 1/2)...", flush=True)
         hud = game.read_hud(h, require=("hpMax",))
         hp_hint = hud["hpMax"] if hud else None
-        print(f"pid {pid}  hud time={hud.get('time') if hud else None} hpMax={hp_hint}")
+        print(f"hud time={hud.get('time') if hud else None} hpMax={hp_hint}", flush=True)
         if (sets or pins) and not hp_hint:
             sys.exit("no HUD frame — refusing to write blind. Is a run in progress?")
 
+        print("locating the stat block (memory sweep 2/2)...", flush=True)
         copies = find_copies(h, hp_hint)
         print(f"stats struct copies: {[hex(c) for c in copies]}")
         if not copies:
