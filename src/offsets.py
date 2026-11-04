@@ -7,13 +7,19 @@ Two layers (see docs/OFFSETS.md):
 """
 
 # Game build these offsets were last confirmed on.
-GAME_VERSION = "v0.2.0-1115"
+GAME_VERSION = "v0.2.0-1118"
 
 # --- stat block -------------------------------------------------------------
 # field -> byte offset. Names match the keys of the game's own stats line
 # ("hp=...;dmg=...;luck=..."), which verify_layout.py compares against.
 # Newest first: verify_layout.py tries them in this order.
 STAT_LAYOUTS = {
+    # 1118: every field OK against a live run; the exe moved the block another
+    # +0x18 (same store pattern), again invisible to us.
+    "v0.2.0-1118": {
+        "hp": 0, "dmg": 4, "cd": 8, "crit": 12, "cm": 16, "spd": 20, "pick": 24,
+        "xp": 28, "arm": 32, "x36": 36, "reg": 40, "area": 44, "luck": 48, "gold": 52,
+    },
     # 1115: every field OK against a live run. In the exe the whole block moved
     # +0x78 inside its owner, but we anchor on the block itself, so no change.
     "v0.2.0-1115": {
@@ -70,7 +76,8 @@ STAT_RANGES = {
 PLAYER_STAT_BASE = 0x5F4    # player object + 0x5F4 = stat block start
 
 # field -> (byte offset from the player-object base, struct format)
-# v1115: every field below re-checked on a live run (HUD, or a banish diff).
+# v1118: every field below re-checked on a live run (HUD; banishes 3 -> 2 after one).
+# Found on v1115 (banishes / chest by diff), unchanged on v1118.
 PLAYER = {
     "level":    (0x58C, "<i"),
     "xp":       (0x590, "<i"),   # current experience, resets on level up
@@ -85,7 +92,7 @@ PLAYER = {
 }
 
 # Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.
-# Empty on v1115. After an update, put a field here until it is re-identified.
+# Empty on v1118. After an update, put a field here until it is re-identified.
 PLAYER_UNVERIFIED = set()
 
 # Stat fields used as the player-object fingerprint (all must be in range at once).
