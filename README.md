@@ -15,6 +15,8 @@
 | **状态层** | `player.py` | 金币、当前血量、最大血量、等级、经验、击杀、重抽次数、放逐次数 | 不会，写的是游戏真实状态 |
 | **属性层** | `trainer.py` | 17 项运行时属性（伤害、暴击、暴伤、急速、移速、拾取、范围、经验倍率、护甲、回复、幸运、回响…） | 会，升级重算会覆盖，需要 `--pin` |
 
+`--pin` 每次写入前都会重新校验目标：如果那块内存不再像属性块（这局结束了、内存被复用），就停止写入，不会往无关内存里乱写。
+
 ![demo](docs/demo.png)
 
 ## 快速开始
@@ -51,7 +53,26 @@ python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 
 这样即使每次启动地址不同、甚至版本小更新，也能稳定定位。
 
-偏移表见 [docs/OFFSETS.md](docs/OFFSETS.md)。
+偏移表见 [docs/OFFSETS.md](docs/OFFSETS.md)；代码里所有偏移只在 [src/offsets.py](src/offsets.py) 一处定义。
+
+## 目录结构
+
+| 文件 | 作用 |
+|---|---|
+| `src/offsets.py` | **所有偏移和合理区间**，游戏更新后只改这里 |
+| `src/memscan.py` | 通用 x64 进程内存读写 + 分块扫描（也能单独当命令行用） |
+| `src/game.py` | 找游戏进程、读取 HUD 数据 |
+| `src/player.py` / `src/trainer.py` | 状态层 / 属性层工具 |
+| `src/verify_layout.py` | 只读自检：偏移还对不对 |
+| `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
+| `src/diffscan.py` | 差分扫描，找未知字段 |
+| `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## 版本更新后
 

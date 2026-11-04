@@ -1,6 +1,6 @@
 # 偏移表
 
-所有偏移都经过**差分快照**或**写入验证**，不是猜的。游戏版本间会变，变了的处理见 [UPDATING.md](UPDATING.md)。
+所有偏移都经过**差分快照**或**写入验证**，不是猜的。代码里的唯一来源是 [`src/offsets.py`](../src/offsets.py)，改偏移只改那里。游戏版本间会变，变了的处理见 [UPDATING.md](UPDATING.md)。
 
 ## 一、属性块（`trainer.py` 用）
 

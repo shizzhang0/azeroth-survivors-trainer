@@ -30,6 +30,8 @@ python src/scan_stores.py    # 扫 exe 里所有 movss [rsi+0x100..0x10000], xmm
 python src/group_stores.py   # 按 .pdata 函数边界分组，输出“包含最多属性写回”的函数
 ```
 
+exe 默认路径是 `C:\Program Files (x86)\AzerothSurvivors\AzerothSurvivors.exe`，装在别处时传参数或设环境变量 `AZS_EXE`。
+
 输出形如：
 
 ```
@@ -44,9 +46,10 @@ func RVA 5ED1410..5ED27FB  stores=21  distinct=20
 新的偏移拿到后，用面板值逐个对照（`crit` 对应 0.xx、`cm` 对应 2.xx 这种），
 或者用 `diffscan.py` 做差分确认。
 
-改 `src/trainer.py` 的 `FIELDS` 表和 `src/verify_layout.py` 的 `LAYOUTS` 表即可。
+只改 `src/offsets.py` 一个文件：在 `STAT_LAYOUTS` **最前面**加上新版本的布局，再把 `GAME_VERSION` 指向它。
+`trainer.py`、`player.py`、`verify_layout.py` 都从这里读偏移。改完跑一遍 `python -m unittest discover -s tests` 再进游戏验证。
 
-> 对象级字段（金币/血/等级/重抽/放逐）若也位移了，用同样的差分法重新确认，
+> 对象级字段（金币/血/等级/重抽/放逐，`offsets.PLAYER`）若也位移了，用同样的差分法重新确认，
 > 参考 `docs/OFFSETS.md` 第四节的思路：找“只减 1 的小整数”。
 
 ## 极端情况
