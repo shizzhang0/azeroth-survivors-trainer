@@ -2,7 +2,8 @@
 
 单机内存修改器，针对 **Azeroth Survivors**（Rust + Bevy 重写的 WoW 1.12 客户端）。
 
-纯内存读写：**不改存档、不改 exe、不注入代码**。退出游戏即完全还原。
+修改器（`trainer.py` / `player.py` / 界面）纯内存读写：**不改存档、不改 exe、不注入代码**，退出游戏即完全还原。
+唯一的例外是单独的 [`save.py`](#存档工具会改存档)：它改的是存档文件，只在游戏关闭时运行，每次先备份。
 
 ## 已验证版本
 
@@ -57,6 +58,27 @@ python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 `--pin` 启动后要先扫两遍内存（30～90 秒，会打印进度），出现 `pinning every 0.02 s` 才开始写入，窗口关掉就停。
 游戏每 1～3 秒会重算一次属性，pin 每 0.02 秒写回一次，面板偶尔闪回原值不超过约一帧（`--interval` 可调）。
 
+## 存档工具（会改存档）
+
+局外的进度（特权重置次数、印记、特权、成就、收藏……）都在存档 `%APPDATA%\wenilla-rogue\characters.txt` 里，内存修改器管不到。
+`save.py` 能解密、修改、重新加密它：
+
+```bash
+python src/save.py --show                 # 解密并打印存档（只读）
+python src/save.py --resets 0             # 特权重置次数恢复满（存的是“已用次数”）
+python src/save.py --marks 9999.9         # 当前职业的印记（升级装备用）
+python src/save.py --marks 500 --cls 5    # 指定职业，职业编号同 WoW：2 圣骑士、5 牧师……
+python src/save.py --export plain.txt     # 导出明文，手工改完再
+python src/save.py --import plain.txt     # 加密写回
+```
+
+- **必须先完全退出游戏**：游戏退出时会用内存里的数据重写存档，开着游戏改会被覆盖。工具检测到游戏在运行会拒绝写入。
+- 每次写入前自动备份到存档旁边的 `trainer-backups\`，写完立即解密回读，只允许预期的那几行发生变化，否则自动还原备份。
+- 加 `--dry-run` 只显示改动、不写入。
+- 密钥不在本仓库里：每次运行时从游戏 exe 里找，并且要能验证当前存档才会使用。游戏换了存档格式时工具会报错退出，不会写出坏存档。
+
+存档格式和各字段含义见 [docs/SAVE.md](docs/SAVE.md)。
+
 ## 原理
 
 **两层结构**，这是本项目最核心的认知：
@@ -86,6 +108,7 @@ python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 | `src/verify_layout.py` | 只读自检：偏移还对不对 |
 | `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
 | `src/diffscan.py` | 差分扫描，找未知字段 |
+| `src/save.py` | 存档解密 / 修改 / 加密（**会改存档**，只在游戏关闭时运行） |
 | `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |
 
 ## 测试
