@@ -432,6 +432,51 @@ class SaveEditTest(unittest.TestCase):
         self.assertEqual(save.decode(KEY, save.read_text(path))[1], new)
         self.assertEqual(save.decode(KEY, save.read_text(backup))[1], PLAIN)
 
+    def test_readers(self):
+        lines = save.lines_of(PLAIN)
+        self.assertEqual(save.resets_used(lines), 2)
+        self.assertEqual(save.resets_used(save.set_resets(lines, 0)), 0)
+        self.assertEqual(save.all_marks(lines), {2: 144.0, 5: 3.0})
+
+    def _save_file(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder)
+        path = os.path.join(folder, "characters.txt")
+        with open(path, "w", newline="") as f:
+            f.write(save.encode(KEY, NONCE, PLAIN))
+        with mock.patch.object(save, "find_key", return_value=KEY):
+            return save.Save(path, exe="unused"), path
+
+    def test_save_commit(self):
+        sv, path = self._save_file()
+        with mock.patch.object(game, "find_pid", return_value=None):
+            self.assertIsNone(sv.commit(sv.lines))                         # no change: no write
+            backup = sv.commit(save.set_resets(sv.lines, 0))
+        self.assertTrue(os.path.exists(backup))
+        self.assertEqual(save.resets_used(save.lines_of(save.decode(KEY, save.read_text(path))[1])), 0)
+
+    def test_backups_never_overwrite_each_other(self):
+        sv, path = self._save_file()
+        original = save.read_text(path)
+        with mock.patch.object(game, "find_pid", return_value=None):
+            first = sv.commit(save.set_marks(sv.lines, 2, 1))
+            sv2 = mock.patch.object(save, "find_key", return_value=KEY)
+            with sv2:
+                second = save.Save(path, exe="unused").commit(save.set_resets(sv.lines, 0))
+        self.assertNotEqual(first, second)                                   # same second, two files
+        self.assertEqual(save.read_text(first), original)                    # the original survives
+
+    def test_save_commit_refuses_stale_read_or_running_game(self):
+        sv, path = self._save_file()
+        with mock.patch.object(game, "find_pid", return_value=1234):
+            with self.assertRaisesRegex(save.SaveError, "running"):
+                sv.commit(save.set_resets(sv.lines, 0))
+        with open(path, "w", newline="") as f:                              # the game saved meanwhile
+            f.write(save.encode(KEY, NONCE, PLAIN + "\nstat|kills=1"))
+        with mock.patch.object(game, "find_pid", return_value=None):
+            with self.assertRaisesRegex(save.SaveError, "reload"):
+                sv.commit(save.set_resets(sv.lines, 0))
+
     def test_refuses_to_write_while_the_game_runs(self):
         folder = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, folder)
