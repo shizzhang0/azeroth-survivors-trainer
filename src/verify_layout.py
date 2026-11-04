@@ -106,6 +106,7 @@ PLAYER_VS_HUD = {
     "gold": ("gold", lambda x: max(200.0, x * 0.5)),
     "kills": ("kills", lambda x: max(100.0, x * 0.5)),
     "rerolls": ("rerolls", lambda x: 2),
+    "chest": ("chestCost", lambda x: max(20.0, x * 0.5)),   # grows each chest opened
 }
 
 

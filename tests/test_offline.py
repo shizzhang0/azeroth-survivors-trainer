@@ -2,6 +2,8 @@
 
   python -m unittest discover -s tests -v
 """
+import contextlib
+import io
 import os
 import struct
 import sys
@@ -67,10 +69,10 @@ def stat_block(**over):
 
 
 def player_object(level=12, xp=34, hp=900.0, gold=5000, rerolls=3, kills=640, banishes=2,
-                  **stats):
+                  chest=31, **stats):
     buf = bytearray(player.OBJ_SIZE)
     for name, val in dict(level=level, xp=xp, hp=hp, gold=gold, rerolls=rerolls,
-                          kills=kills, banishes=banishes).items():
+                          kills=kills, banishes=banishes, chest=chest).items():
         off, fmt = offsets.PLAYER[name]
         struct.pack_into(fmt, buf, off, val)
     sb = stat_block(**stats)
@@ -197,6 +199,19 @@ class PlayerTest(unittest.TestCase):
                 player.main()
             find_pid.assert_not_called()          # refused before touching the game
 
+    def test_writes_chest_price(self):
+        written = {}
+        with mock.patch.object(sys, "argv", ["player.py", "--pid", "1", "--chest", "1"]), \
+                mock.patch.object(memscan, "open_process", return_value=None), \
+                mock.patch.object(memscan.k32, "CloseHandle"), \
+                mock.patch.object(player, "locate", return_value=(0x5000, {})), \
+                mock.patch.object(player, "show"), \
+                mock.patch.object(player.time, "sleep"), \
+                mock.patch.object(memscan, "write",
+                                  side_effect=lambda _h, a, b: written.update({a: b})),                 contextlib.redirect_stdout(io.StringIO()):
+            player.main()
+        self.assertEqual(written, {0x5000 + offsets.PLAYER["chest"][0]: struct.pack("<i", 1)})
+
     def test_matches_hud_rejects_overfull_health(self):
         blob = player_object(hp=5000.0)
         self.assertFalse(player.matches_hud(blob, {"kills": 640, "gold": 5000}))
@@ -227,11 +242,12 @@ class VerifyLayoutTest(unittest.TestCase):
         self.assertEqual(verify_layout.compare_line(best, lay, ctx)[1], 0)
 
     def test_check_player_flags_moved_offset(self):
-        hud = {"level": 16, "gold": 399, "kills": 341, "rerolls": 5}
+        hud = {"level": 16, "gold": 399, "kills": 341, "rerolls": 5, "chestCost": 31}
         ok = {f: v for f, _m, _r, v in verify_layout.check_player(
             player_object(level=16, gold=399, kills=341, rerolls=5, hp=486.0), hud)}
         self.assertEqual(ok["kills"], "OK")
         self.assertEqual(ok["level"], "OK")
+        self.assertEqual(ok["chest"], "OK")
         # what v1039 looked like through the old kills offset: garbage
         moved = {f: v for f, _m, _r, v in verify_layout.check_player(
             player_object(level=16, gold=399, kills=-696905680, rerolls=5), hud)}

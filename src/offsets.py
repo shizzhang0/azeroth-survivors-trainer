@@ -80,6 +80,8 @@ PLAYER = {
     "kills":    (0xA3C, "<i"),   # v1039 (was 0x974 up to 1036): matched HUD 222 -> 268
     "banishes": (0x1050, "<i"),  # v1115: watched 3 -> 2 on a real banish, only slot
                                  # that dropped by 1 (1036 had it at 0xF5C)
+    "chest":    (0x1024, "<i"),  # v1115: gold price of the next chest (HUD chestCost);
+                                 # 20 -> 31 on opening one; wrote 1, HUD showed 1
 }
 
 # Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.

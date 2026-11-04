@@ -1,4 +1,4 @@
-"""Azeroth Survivors — player-object tool (gold / health / level / xp / kills).
+"""Azeroth Survivors — player-object tool (gold / health / level / xp / kills / chest price).
 
 This is the second layer: the run-state object that owns the stat block the
 trainer writes, found by a structural fingerprint instead of by value guessing.
@@ -8,6 +8,7 @@ trainer writes, found by a structural fingerprint instead of by value guessing.
   python player.py --heal
   python player.py --hp 5000 --maxhp 5000
   python player.py --level 30 --xp 0
+  python player.py --chest 1          # next chest costs 1 gold (grows again on opening)
 
 Offsets live in offsets.py: confirmed by differential snapshots and a write
 test (gold wrote 999999 and the HUD followed; current HP write healed the hero),
@@ -36,6 +37,7 @@ WRITABLE = {
     "kills": PLAYER["kills"],
     "rerolls": PLAYER["rerolls"],
     "banishes": PLAYER["banishes"],
+    "chest": PLAYER["chest"],
 }
 MAXHP = player_stat("hp")
 LEVEL_K = PLAYER["level"][0] // 4
@@ -111,6 +113,7 @@ def show(h, base):
     print(f"  health = {p['hp']:.1f} / {s['hp']:.1f}")
     print(f"  level  = {p['level']}   xp = {p['xp']}")
     print(f"  kills  = {p['kills']}   rerolls = {p['rerolls']}   banishes = {p['banishes']}")
+    print(f"  chest  = {p['chest']} gold")
     print(f"  dmg={s['dmg']:.3f} crit={s['crit']:.3f} cm={s['cm']:.2f} spd={s['spd']:.3f} "
           f"luck={s['luck']:.3f} area={s['area']:.3f}")
 
