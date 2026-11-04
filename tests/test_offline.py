@@ -276,7 +276,7 @@ class OffsetsTest(unittest.TestCase):
 
     def test_current_version_is_tried_first(self):
         # verify_layout.py reports the FIRST layout that fits; identical layouts
-        # (1115 == 1039 == 1036) must name the build we actually target.
+        # (1118 == 1115 == 1039 == 1036) must name the build we actually target.
         self.assertEqual(next(iter(offsets.STAT_LAYOUTS)), offsets.GAME_VERSION)
 
     def test_matches_docs(self):
