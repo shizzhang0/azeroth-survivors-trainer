@@ -13,6 +13,7 @@ import time
 
 import numpy as np
 
+import game
 import memscan
 
 MODE_CENSUS = "--census" in sys.argv
@@ -45,32 +46,8 @@ used = 0
 t_start = time.time()
 
 
-def hud_time():
-    import re
-    best = None
-    for base, size, prot, typ in memscan.regions(h):
-        off = 0
-        while off < size:
-            n = min(memscan.CHUNK, size - off)
-            raw = memscan.read(h, base + off, n)
-            if raw:
-                text = raw.decode("latin-1")
-                start = 0
-                while True:
-                    i = text.find('{"type":"hud"', start)
-                    if i < 0:
-                        break
-                    start = i + 1
-                    m = re.search(r'"time":(-?[0-9.]+)', text[i:i + 400])
-                    if m:
-                        v = float(m.group(1))
-                        if best is None or v > best:
-                            best = v
-            off += n
-    return best
-
-
-t_hud = hud_time()
+hud = game.read_hud(h, require=("time",))
+t_hud = hud["time"] if hud else None
 print(f"hud time: {t_hud}", flush=True)
 for base, size in regions:
     raw = memscan.read(h, base, size)

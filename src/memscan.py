@@ -90,6 +90,52 @@ def regions(h, skip_image=True):
         addr = base + size
 
 
+def iter_chunks(h, overlap=0, chunk=None):
+    """Yield (addr, bytes) over every readable region, CHUNK bytes at a time.
+
+    `overlap` extra bytes are read past each chunk (never past the region), so a
+    pattern or struct that straddles a chunk boundary is still seen whole. Hits in
+    the overlap show up twice — callers dedupe by address.
+    """
+    chunk = chunk or CHUNK
+    for base, size, _prot, _typ in regions(h):
+        off = 0
+        while off < size:
+            n = min(chunk + overlap, size - off)
+            raw = read(h, base + off, n)
+            if raw:
+                yield base + off, raw
+            off += chunk
+
+
+def as_f32(raw):
+    """bytes -> float32 view (trailing partial word dropped)."""
+    return np.frombuffer(raw, dtype=np.float32, count=len(raw) // 4)
+
+
+def match_fields(arr, checks):
+    """Indices i where lo <= arr[i + k] <= hi for every (k, lo, hi) in checks.
+
+    k is a float index (byte offset // 4). Indices whose struct would run past
+    the end of arr are not returned. NaN never matches.
+    """
+    if not checks:
+        return np.empty(0, dtype=np.intp)
+    span = max(k for k, _lo, _hi in checks) + 1
+    n = len(arr) - span + 1
+    if n <= 0:
+        return np.empty(0, dtype=np.intp)
+    k0, lo0, hi0 = checks[0]
+    v = arr[k0:k0 + n]
+    idx = np.flatnonzero((v >= lo0) & (v <= hi0))
+    for k, lo, hi in checks[1:]:
+        if not len(idx):
+            break
+        v = arr[idx + k]
+        idx = idx[(v >= lo) & (v <= hi)]
+    return idx
+
+
 def read(h, addr, size):
     buf = ctypes.create_string_buffer(size)
     got = ctypes.c_size_t(0)
@@ -157,27 +203,19 @@ def cmd_scan(args):
     window = args.window
     hits = []
     scanned = 0
-    for base, size, prot, typ in regions(h):
-        off = 0
-        while off < size:
-            n = min(CHUNK, size - off)
-            raw = read(h, base + off, n)
-            if raw is None or len(raw) < 4:
-                off += n
+    for addr, raw in iter_chunks(h):
+        scanned += len(raw)
+        arr = as_f32(raw)
+        idx = np.flatnonzero(np.isclose(arr, anchor, rtol=1e-5, atol=1e-7))
+        for i in idx:
+            a = addr + int(i) * 4
+            if any(abs(a - b) < window for b in hits):
                 continue
-            scanned += len(raw)
-            arr = np.frombuffer(raw, dtype=np.float32)
-            idx = np.flatnonzero(np.isclose(arr, anchor, rtol=1e-5, atol=1e-7))
-            for i in idx:
-                a = base + off + int(i) * 4
-                if any(abs(a - b) < window for b in hits):
-                    continue
-                near = floats_at(h, a - window, (2 * window) // 4)
-                found = [bool(np.any(np.isclose(near, e, rtol=1e-5, atol=1e-7)))
-                         for e in expects]
-                if all(found):
-                    hits.append(a)
-            off += n
+            near = floats_at(h, a - window, (2 * window) // 4)
+            found = [bool(np.any(np.isclose(near, e, rtol=1e-5, atol=1e-7)))
+                     for e in expects]
+            if all(found):
+                hits.append(a)
     print(f"scanned {scanned/1048576:.0f} MB, {len(hits)} candidate(s)")
     for a in hits[:args.limit]:
         ctx = floats_at(h, a - 64, 64)
@@ -192,25 +230,17 @@ def cmd_strscan(args):
     needle = args.pattern.encode()
     seen = []
     scanned = 0
-    for base, size, prot, typ in regions(h):
-        off = 0
-        while off < size:
-            n = min(CHUNK, size - off)
-            raw = read(h, base + off, n)
-            if raw is None or not raw:
-                off += n
-                continue
-            scanned += len(raw)
-            start = 0
-            while True:
-                i = raw.find(needle, start)
-                if i < 0:
-                    break
-                a = base + off + i
-                if not any(abs(a - b) < 64 for b in seen):
-                    seen.append(a)
-                start = i + 1
-            off += n
+    for addr, raw in iter_chunks(h, overlap=max(0, len(needle) - 1)):
+        scanned += len(raw)
+        start = 0
+        while True:
+            i = raw.find(needle, start)
+            if i < 0:
+                break
+            a = addr + i
+            if not any(abs(a - b) < 64 for b in seen):
+                seen.append(a)
+            start = i + 1
     print(f"scanned {scanned/1048576:.0f} MB, {len(seen)} hit(s)")
     for a in seen[:args.limit]:
         lo = max(0, a - args.context)
