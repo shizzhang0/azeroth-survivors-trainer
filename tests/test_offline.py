@@ -18,6 +18,7 @@ import game            # noqa: E402
 import memscan         # noqa: E402
 import offsets         # noqa: E402
 import player          # noqa: E402
+import session         # noqa: E402
 import trainer         # noqa: E402
 import verify_layout   # noqa: E402
 
@@ -284,6 +285,75 @@ class OffsetsTest(unittest.TestCase):
         self.assertEqual(offsets.player_stat("hp"), 0x5F4)
         self.assertEqual(offsets.player_stat("luck"), 0x624)
         self.assertEqual(offsets.player_stat("gold"), 0x628)
+
+
+class SessionTest(unittest.TestCase):
+    """The GUI's core, against a fake player object (no game, no window)."""
+
+    def setUp(self):
+        self.mem = FakeMemory()
+        self.obj = self.mem.add(0x40000, 0x2000)
+        self.mem.put(self.obj, player_object(gold=120, chest=31))
+        self.s = session.Session()
+        self.s.base = self.obj           # as if locate() had found it
+        p = self.mem.patch()
+        p.start()
+        self.addCleanup(p.stop)
+        w = mock.patch.object(memscan, "write",
+                              side_effect=lambda _h, a, d: self.mem.put(a, d) or True)
+        w.start()
+        self.addCleanup(w.stop)
+
+    def test_read_both_layers(self):
+        v = self.s.read()
+        self.assertEqual(v[("player", "gold")], 120)
+        self.assertEqual(v[("player", "chest")], 31)
+        self.assertAlmostEqual(v[("stat", "cm")], 2.0)
+
+    def test_write_player_field(self):
+        self.assertEqual(self.s.write("player", "chest", "1"), 1)
+        self.assertEqual(self.s.read()[("player", "chest")], 1)
+
+    def test_lock_rewrites_after_the_game_recomputes(self):
+        self.s.pin("stat", "luck", "5")
+        self.s.tick()
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 5.0)
+        self.mem.put(self.obj, player_object(gold=120))         # game recomputed: luck 0
+        self.s.tick()
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 5.0)
+
+    def test_out_of_range_lock_does_not_kill_the_target(self):
+        # luck=500 is outside STAT_RANGES; the liveness check must skip pinned fields
+        self.s.pin("stat", "luck", 500)
+        self.assertEqual(self.s.tick(), 0)
+        self.assertIsNotNone(self.s.read())
+
+    def test_target_gone_counts_misses_and_stops_reading(self):
+        self.s.pin("player", "chest", 1)
+        self.mem.put(self.obj, bytes(0x2000))                   # memory freed / reused
+        self.assertEqual(self.s.tick(0), 1)
+        self.assertIsNone(self.s.read())
+
+    def test_input_checks(self):
+        with self.assertRaises(ValueError):
+            self.s.write("player", "gold", "1.5")               # i32 field
+        with self.assertRaises(ValueError):
+            self.s.pin("stat", "luck", "nan")
+        with self.assertRaises(ValueError):
+            self.s.pin("player", "level", 30)                   # not lockable
+        with mock.patch.object(session, "PLAYER_UNVERIFIED", {"banishes"}),                 self.assertRaises(ValueError):
+            self.s.write("player", "banishes", 9)
+        self.s.pin("stat", "luck", 5)
+        self.s.pin("stat", "luck", None)
+        self.assertEqual(self.s.pinned(), set())
+
+    def test_locate_failure_is_an_error_not_an_exit(self):
+        s = session.Session()
+        with mock.patch.object(game, "find_pid", return_value=42),                 mock.patch.object(memscan, "open_process", return_value=7),                 mock.patch.object(memscan.k32, "CloseHandle") as close,                 mock.patch.object(player, "locate", side_effect=SystemExit("player object not found")):
+            with self.assertRaisesRegex(session.SessionError, "not found"):
+                s.locate()
+        close.assert_called_once_with(7)
+        self.assertFalse(s.connected)
 
 
 if __name__ == "__main__":

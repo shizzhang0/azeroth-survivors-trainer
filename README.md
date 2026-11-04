@@ -21,7 +21,20 @@
 
 ![demo](docs/demo.png)
 
-## 快速开始
+## 图形界面（推荐）
+
+双击仓库根目录的 **`gui.bat`**（需要已安装 uv），或者：
+
+```bash
+uv run --no-project --with numpy python src/gui.py
+```
+
+1. 进入一局后点 **定位游戏**，等 30～90 秒扫描完成。
+2. **左边“属性”**：输入数值，勾 **锁定**（或直接按回车）就持续生效；游戏每 1～3 秒会重算这些值，不锁定写了也会被改回去。
+3. **右边“状态”**：输入数值点 **写入**（或回车）；金币、血量、重抽、放逐、宝箱价格还能勾 **锁定**，比如宝箱价格锁在 1。
+4. 锁定中的当前值显示为绿色。这局结束、目标失效时会自动解除全部锁定，进新的一局再点一次定位。
+
+## 命令行
 
 ```bash
 pip install numpy
@@ -68,7 +81,8 @@ python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 | `src/offsets.py` | **所有偏移和合理区间**，游戏更新后只改这里 |
 | `src/memscan.py` | 通用 x64 进程内存读写 + 分块扫描（也能单独当命令行用） |
 | `src/game.py` | 找游戏进程、读取 HUD 数据 |
-| `src/player.py` / `src/trainer.py` | 状态层 / 属性层工具 |
+| `src/player.py` / `src/trainer.py` | 状态层 / 属性层命令行工具 |
+| `src/gui.py` / `src/session.py` / `gui.bat` | 图形界面 / 界面背后的定位、读写、锁定逻辑 / 双击启动 |
 | `src/verify_layout.py` | 只读自检：偏移还对不对 |
 | `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
 | `src/diffscan.py` | 差分扫描，找未知字段 |
