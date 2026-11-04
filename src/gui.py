@@ -7,6 +7,8 @@ Click 定位游戏 inside a run, wait for the sweep (30-90 s), then:
     recomputes these every 1-3 s, so only a lock sticks.
   * 状态 (run state): type a value, click 写入 (or press Enter). Tick 锁定 to
     keep it there (e.g. chest price 1, rerolls 99).
+  * 存档 (save file, via save.py): perk resets and marks. Only writable while
+    the game is closed — the game rewrites the save when it exits.
 """
 import ctypes
 import queue
@@ -14,6 +16,8 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+import game
+import save
 from offsets import GAME_VERSION
 from session import FIELDS, SPEC, Session, SessionError
 
@@ -67,8 +71,12 @@ class App:
         ttk.Button(state, text="回满血", command=self.heal).grid(
             row=counts["player"] + 1, column=0, sticky="w", pady=(8, 0))
 
+        self.save_panel = SavePanel(root, self)
+        self.save_panel.frame.grid(row=2, column=0, columnspan=2, sticky="ew",
+                                   padx=10, pady=(0, 10))
+
         bottom = ttk.Frame(root, padding=(10, 0, 10, 10))
-        bottom.grid(row=2, column=0, columnspan=2, sticky="ew")
+        bottom.grid(row=3, column=0, columnspan=2, sticky="ew")
         ttk.Button(bottom, text="全部解锁", command=self.unlock_all).pack(side="left")
         self.msg = tk.StringVar()
         self.msg_label = ttk.Label(bottom, textvariable=self.msg)
@@ -210,6 +218,7 @@ class App:
     # --- refresh loop -------------------------------------------------------
     def refresh(self):
         self.root.after(REFRESH_MS, self.refresh)
+        self.save_panel.tick()
         if self.locating or self.session.base is None:
             return
         vals = None if self.session.lost else self.session.read()
@@ -237,6 +246,167 @@ class App:
     def quit(self):
         self.session.close()
         self.root.destroy()
+
+
+GAME_CHECK_EVERY = 3    # refresh ticks (~1 s) between "is the game running?" checks
+
+
+class SavePanel:
+    """Out-of-run progress in the save file. Writable only while the game is closed."""
+
+    def __init__(self, root, app):
+        self.root, self.app = root, app
+        self.sv = None                  # save.Save of the last successful read
+        self.loading = False
+        self.results = queue.Queue()
+        self.game_running = None
+        self.ticks = 0
+        self.classes = []               # class ids in the combobox, same order
+
+        f = self.frame = ttk.LabelFrame(
+            root, text="存档（局外进度 · 只有游戏完全退出后才能改，每次自动备份）", padding=8)
+        self.info = tk.StringVar(value="读取中…")
+        ttk.Label(f, textvariable=self.info).grid(row=0, column=0, columnspan=5, sticky="w")
+        self.reload_btn = ttk.Button(f, text="重新读取", command=self.load)
+        self.reload_btn.grid(row=0, column=5, sticky="e")
+
+        ttk.Label(f, text="特权重置").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.resets_cur = ttk.Label(f, text="-", width=14)
+        self.resets_cur.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        self.resets_btn = ttk.Button(f, text="清零（恢复全部重置）", command=self.clear_resets)
+        self.resets_btn.grid(row=1, column=2, columnspan=2, sticky="w", pady=(6, 0))
+
+        ttk.Label(f, text="印记").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.cls = ttk.Combobox(f, state="readonly", width=12)
+        self.cls.grid(row=2, column=1, sticky="w", pady=(4, 0))
+        self.cls.bind("<<ComboboxSelected>>", lambda _e: self.show_marks())
+        self.marks_cur = ttk.Label(f, text="-", width=14, anchor="e")
+        self.marks_cur.grid(row=2, column=2, sticky="e", padx=(0, 8), pady=(4, 0))
+        self.marks_entry = ttk.Entry(f, width=10)
+        self.marks_entry.grid(row=2, column=3, pady=(4, 0))
+        self.marks_entry.bind("<Return>", lambda _e: self.write_marks())
+        self.marks_btn = ttk.Button(f, text="写入", width=5, command=self.write_marks)
+        self.marks_btn.grid(row=2, column=4, padx=(4, 0), pady=(4, 0))
+
+        self.hint = ttk.Label(f, text="")
+        self.hint.grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        self.load()
+
+    # --- read -------------------------------------------------------------
+    def load(self):
+        if self.loading:
+            return
+        self.loading = True
+        self.info.set("读取存档中…")
+        self.update_state()
+
+        def work():
+            try:
+                self.results.put(("ok", save.Save()))
+            except save.SaveError as e:
+                self.results.put(("err", str(e)))
+            except Exception as e:      # noqa: BLE001
+                self.results.put(("err", f"{type(e).__name__}: {e}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def take_result(self):
+        try:
+            kind, val = self.results.get_nowait()
+        except queue.Empty:
+            return
+        self.loading = False
+        if kind == "err":
+            self.sv = None
+            self.info.set(f"读不了存档：{val}")
+        else:
+            self.sv = val
+            self.info.set(f"存档：{self.sv.path}")
+        self.show()
+
+    def show(self):
+        if not self.sv:
+            self.resets_cur.configure(text="-")
+            self.marks_cur.configure(text="-")
+            self.update_state()
+            return
+        lines = self.sv.lines
+        self.resets_cur.configure(text=f"已用 {save.resets_used(lines)} 次")
+        marks = save.all_marks(lines)
+        try:
+            current = save.current_class(lines)
+        except save.SaveError:
+            current = None
+        # every class, plus any id the save has that we don't know a name for
+        self.classes = sorted(set(save.CLASS_NAMES) | set(marks) | ({current} if current else set()))
+        self.cls.configure(values=[f"{save.CLASS_NAMES.get(c, '职业')} ({c})" for c in self.classes])
+        if self.classes and self.cls.current() < 0:
+            self.cls.current(self.classes.index(current) if current in self.classes else 0)
+        self.show_marks()
+        self.update_state()
+
+    def show_marks(self):
+        i = self.cls.current()
+        if not self.sv or i < 0:
+            self.marks_cur.configure(text="-")
+            return
+        v = save.all_marks(self.sv.lines).get(self.classes[i])
+        self.marks_cur.configure(text="0.0（无记录）" if v is None else f"{v:.1f}")
+
+    # --- game running? ----------------------------------------------------
+    def tick(self):
+        self.take_result()
+        self.ticks += 1
+        if self.ticks % GAME_CHECK_EVERY and self.game_running is not None:
+            return
+        running = bool(game.find_pid())
+        if running == self.game_running:
+            return
+        was = self.game_running
+        self.game_running = running
+        if was and not running:
+            self.load()                 # the game rewrote the save on its way out
+        self.update_state()
+
+    def update_state(self):
+        can = bool(self.sv) and self.game_running is False and not self.loading
+        for w in (self.resets_btn, self.marks_btn, self.marks_entry):
+            w.state(["!disabled"] if can else ["disabled"])
+        if self.game_running:
+            self.hint.configure(text="游戏正在运行：存档只读。完全退出游戏后这里会自动变成可改。",
+                                style="Err.TLabel")
+        else:
+            self.hint.configure(text="改完再启动游戏；备份在存档旁边的 trainer-backups 文件夹。",
+                                style="TLabel")
+
+    # --- write ------------------------------------------------------------
+    def commit(self, new_lines, what):
+        try:
+            backup = self.sv.commit(new_lines)
+        except save.SaveError as e:
+            self.app.say(str(e), error=True)
+            return
+        if backup is None:
+            self.app.say(f"{what}：没有变化")
+        else:
+            self.app.say(f"{what}：已写入并核对，备份 {backup}")
+        self.load()
+
+    def clear_resets(self):
+        if self.sv:
+            self.commit(save.set_resets(self.sv.lines, 0), "特权重置清零")
+
+    def write_marks(self):
+        i = self.cls.current()
+        if not self.sv or i < 0:
+            return
+        try:
+            value = float(self.marks_entry.get().strip())
+            new = save.set_marks(self.sv.lines, self.classes[i], value)
+        except (ValueError, save.SaveError) as e:
+            self.app.say(f"印记：{e}", error=True)
+            return
+        self.commit(new, f"{save.CLASS_NAMES.get(self.classes[i], '')}印记 → {value:.1f}")
 
 
 def main():

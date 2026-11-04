@@ -209,10 +209,19 @@ def read_text(path, encoding="ascii"):
 def backup(path):
     folder = os.path.join(os.path.dirname(path), BACKUP_DIR)
     os.makedirs(folder, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    dest = os.path.join(folder, f"characters-{stamp}.txt")
-    shutil.copy2(path, dest)
-    return dest
+    now = datetime.datetime.now()
+    stamp = now.strftime("%Y%m%d-%H%M%S-") + f"{now.microsecond // 1000:03d}"   # sorts by time
+    # never overwrite an earlier backup: two edits within one second are easy in the GUI
+    for n in range(1000):
+        dest = os.path.join(folder, f"characters-{stamp}{'' if n == 0 else f'-{n}'}.txt")
+        try:
+            with open(path, "rb") as src, open(dest, "xb") as out:
+                shutil.copyfileobj(src, out)
+        except FileExistsError:
+            continue
+        shutil.copystat(path, dest)
+        return dest
+    raise SaveError("could not pick a free backup name")
 
 
 def write_checked(key, path, nonce, old_plain, new_plain):
@@ -234,6 +243,54 @@ def write_checked(key, path, nonce, old_plain, new_plain):
     return saved
 
 
+CLASS_NAMES = {1: "战士", 2: "圣骑士", 3: "猎人", 4: "盗贼", 5: "牧师",
+               7: "萨满", 8: "法师", 9: "术士", 11: "德鲁伊"}
+GAME_RUNNING = ("游戏正在运行：它退出时会重写存档、把改动覆盖掉。先完全退出游戏。"
+                " (the game is running — close it completely first)")
+
+
+def resets_used(lines):
+    i = field(lines, "resets")
+    return 0 if i is None else int(lines[i].split("|")[1])
+
+
+def all_marks(lines):
+    """{class id: marks in game units} for every marks line."""
+    out = {}
+    for l in lines:
+        p = l.split("|")
+        if p[0] == "marks" and len(p) == 3:
+            out[int(p[1])] = int(p[2]) / MARKS_SCALE
+    return out
+
+
+class Save:
+    """One read of the save, decrypted. commit() writes an edited copy back."""
+
+    def __init__(self, path=SAVE, exe=DEFAULT_EXE):
+        self.path = path
+        try:
+            self.text = read_text(path)
+        except OSError as e:
+            raise SaveError(f"cannot read the save: {e}") from None
+        self.key = find_key(exe, self.text)
+        self.nonce, self.plain = decode(self.key, self.text)
+        self.lines = lines_of(self.plain)
+
+    def commit(self, new_lines):
+        """Write `new_lines` (an edit of self.lines). Returns the backup path, or
+        None when nothing changed."""
+        new_plain = "\n".join(new_lines)
+        if new_plain == self.plain:
+            return None
+        if game.find_pid():
+            raise SaveError(GAME_RUNNING)
+        if read_text(self.path) != self.text:
+            raise SaveError("存档在读取之后被改过（游戏刚存过档？），重新读取后再改"
+                            " (the save changed since it was read: reload first)")
+        return write_checked(self.key, self.path, self.nonce, self.plain, new_plain)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--file", default=SAVE, help="save file (default: %(default)s)")
@@ -250,13 +307,8 @@ def main():
     args = ap.parse_args()
 
     try:
-        text = read_text(args.file)
-    except OSError as e:
-        sys.exit(f"cannot read the save: {e}")
-    try:
-        key = find_key(args.exe, text)
-        nonce, plain = decode(key, text)
-        lines = lines_of(plain)
+        sv = Save(args.file, args.exe)
+        plain, lines = sv.plain, sv.lines
 
         if args.show or not any(v is not None for v in (args.resets, args.marks, args.import_, args.export)):
             print(plain)
@@ -282,10 +334,7 @@ def main():
         if args.dry_run:
             print("dry run: nothing written")
             return
-        if game.find_pid():
-            sys.exit("the game is running — it rewrites the save on exit and would undo "
-                     "this. Close it completely, then run again.")
-        saved = write_checked(key, args.file, nonce, plain, new_plain)
+        saved = sv.commit(new)
         print(f"written and verified. backup: {saved}")
     except SaveError as e:
         sys.exit(str(e))
