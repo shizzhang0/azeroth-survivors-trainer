@@ -14,12 +14,16 @@ python src/verify_layout.py
 它会读出当前这局的面板值，逐个偏移核对，然后告诉你：
 
 ```
-layout that fits: v0.2.0-1036
+layout that fits: v0.2.0-1039
 VERDICT: offsets still valid
+...
+VERDICT: player offsets match the HUD
 ```
 
-- 出现 `offsets valid` → 什么也不用做；
-- 出现 `N structural field(s) moved` → 进第 2 步。
+两段结论分别对应两层：
+
+- 属性块：出现 `offsets valid` → 不用动；出现 `N structural field(s) moved` → 进第 2 步。
+- 玩家对象（等级/金币/击杀/重抽/血量，与 HUD 对照）：出现 `player field(s) moved` → 按本文末尾的差分法重新定位对应字段。1039 的击杀数就是这样发现从 `+0x974` 移到 `+0xA3C` 的。
 
 ### 2. 重新扫偏移
 

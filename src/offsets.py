@@ -7,13 +7,18 @@ Two layers (see docs/OFFSETS.md):
 """
 
 # Game build these offsets were last confirmed on.
-GAME_VERSION = "v0.2.0-1036"
+GAME_VERSION = "v0.2.0-1039"
 
 # --- stat block -------------------------------------------------------------
 # field -> byte offset. Names match the keys of the game's own stats line
 # ("hp=...;dmg=...;luck=..."), which verify_layout.py compares against.
 # Newest first: verify_layout.py tries them in this order.
 STAT_LAYOUTS = {
+    # 1039: verify_layout.py against a live run, every field OK (same as 1036)
+    "v0.2.0-1039": {
+        "hp": 0, "dmg": 4, "cd": 8, "crit": 12, "cm": 16, "spd": 20, "pick": 24,
+        "xp": 28, "arm": 32, "x36": 36, "reg": 40, "area": 44, "luck": 48, "gold": 52,
+    },
     "v0.2.0-1036": {
         "hp": 0, "dmg": 4, "cd": 8, "crit": 12, "cm": 16, "spd": 20, "pick": 24,
         "xp": 28, "arm": 32, "x36": 36, "reg": 40, "area": 44, "luck": 48, "gold": 52,
@@ -59,15 +64,21 @@ STAT_RANGES = {
 PLAYER_STAT_BASE = 0x5F4    # player object + 0x5F4 = stat block start
 
 # field -> (byte offset from the player-object base, struct format)
+# v1039: level/xp/hp/gold/rerolls/kills re-checked against the live HUD.
 PLAYER = {
     "level":    (0x58C, "<i"),
     "xp":       (0x590, "<i"),   # current experience, resets on level up
     "hp":       (0x594, "<f"),   # current health
     "gold":     (0x5A4, "<i"),   # coin amount
     "rerolls":  (0x658, "<i"),   # watched 5 -> 4 on a real reroll
-    "kills":    (0x974, "<i"),
-    "banishes": (0xF5C, "<i"),   # watched 3 -> 2 on a real banish
+    "kills":    (0xA3C, "<i"),   # v1039 (was 0x974 up to 1036): matched HUD 222 -> 268
+    "banishes": (0xF5C, "<i"),   # 1036: watched 3 -> 2 on a real banish. NOT re-verified
 }
+
+# Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.
+# v1039 inserted 0xC8 bytes somewhere before kills; +0xF5C reads 0 and
+# +0xF5C+0xC8 reads 20, so banishes needs a fresh banish diff (OFFSETS.md §4).
+PLAYER_UNVERIFIED = {"banishes"}
 
 # Stat fields used as the player-object fingerprint (all must be in range at once).
 PLAYER_FINGERPRINT = ("cm", "spd", "pick", "xp", "arm", "reg", "area")

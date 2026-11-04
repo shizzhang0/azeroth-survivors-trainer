@@ -188,6 +188,15 @@ class PlayerTest(unittest.TestCase):
         self.assertEqual(base, obj)
         self.assertEqual(info["kills"], 640)
 
+    def test_refuses_to_write_unverified_field(self):
+        with mock.patch.object(sys, "argv", ["player.py", "--banishes", "9"]), \
+                mock.patch.object(offsets, "PLAYER_UNVERIFIED", {"banishes"}), \
+                mock.patch.object(player, "PLAYER_UNVERIFIED", {"banishes"}), \
+                mock.patch.object(game, "find_pid") as find_pid:
+            with self.assertRaises(SystemExit):
+                player.main()
+            find_pid.assert_not_called()          # refused before touching the game
+
     def test_matches_hud_rejects_overfull_health(self):
         blob = player_object(hp=5000.0)
         self.assertFalse(player.matches_hud(blob, {"kills": 640, "gold": 5000}))
@@ -206,6 +215,28 @@ class VerifyLayoutTest(unittest.TestCase):
                     for name, lay in verify_layout.LAYOUTS.items()}
         self.assertEqual(hits["v0.2.0-1036"], [blk])
         self.assertEqual(hits["v0.2.0-977"], [])
+
+    def test_stale_line_before_a_card_pick_is_not_a_moved_field(self):
+        lay = offsets.STAT
+        ctx = np.frombuffer(stat_block(luck=0.48, xp=1.69), dtype=np.float32)
+        old = dict(hp=1200.0, cm=2.0, luck=0.30, xp=1.2, area=1.0, gold=1.0)
+        new = dict(old, luck=0.48, xp=1.69)
+        self.assertEqual(verify_layout.compare_line(old, lay, ctx)[1], 2)
+        best = min([old, new], key=lambda v: verify_layout.compare_line(v, lay, ctx)[1:])
+        self.assertIs(best, new)
+        self.assertEqual(verify_layout.compare_line(best, lay, ctx)[1], 0)
+
+    def test_check_player_flags_moved_offset(self):
+        hud = {"level": 16, "gold": 399, "kills": 341, "rerolls": 5}
+        ok = {f: v for f, _m, _r, v in verify_layout.check_player(
+            player_object(level=16, gold=399, kills=341, rerolls=5, hp=486.0), hud)}
+        self.assertEqual(ok["kills"], "OK")
+        self.assertEqual(ok["level"], "OK")
+        # what v1039 looked like through the old kills offset: garbage
+        moved = {f: v for f, _m, _r, v in verify_layout.check_player(
+            player_object(level=16, gold=399, kills=-696905680, rerolls=5), hud)}
+        self.assertEqual(moved["kills"], "MISMATCH")
+        self.assertEqual(moved["gold"], "OK")
 
     def test_stat_lines(self):
         mem = FakeMemory()

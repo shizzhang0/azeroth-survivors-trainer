@@ -9,9 +9,10 @@ trainer writes, found by a structural fingerprint instead of by value guessing.
   python player.py --hp 5000 --maxhp 5000
   python player.py --level 30 --xp 0
 
-Offsets (offsets.py) confirmed on v0.2.0-1036 by differential snapshots and a
-write test (gold wrote 999999 and the HUD followed; current HP write healed the
-hero).
+Offsets live in offsets.py: confirmed by differential snapshots and a write
+test (gold wrote 999999 and the HUD followed; current HP write healed the hero),
+and re-checked against the live HUD after each update. Fields listed in
+offsets.PLAYER_UNVERIFIED are shown as "?" and refused for writing.
 """
 import argparse
 import struct
@@ -22,7 +23,8 @@ import numpy as np
 
 import game
 import memscan
-from offsets import PLAYER, PLAYER_FINGERPRINT, STAT_RANGES, player_stat
+from offsets import (GAME_VERSION, PLAYER, PLAYER_FINGERPRINT, PLAYER_UNVERIFIED,
+                     STAT_RANGES, player_stat)
 
 # Writable run-state fields, in write order (maxhp before anything that reads it).
 WRITABLE = {
@@ -70,7 +72,8 @@ def matches_hud(blob, info):
 
 def locate(h):
     """Player object by structural fingerprint, verified against the HUD."""
-    info = game.read_hud(h, require=("gold",))
+    # a newer partial frame can carry gold but not kills: insist on a whole one
+    info = game.read_hud(h, require=("gold", "kills", "level"))
     if not info:
         sys.exit("no HUD frame — is a run in progress?")
 
@@ -100,7 +103,8 @@ def show(h, base):
     if not blob or len(blob) < OBJ_SIZE:
         print("  (player object unreadable)")
         return
-    p = {k: get(blob, off, fmt) for k, (off, fmt) in PLAYER.items()}
+    p = {k: ("?" if k in PLAYER_UNVERIFIED else get(blob, off, fmt))
+         for k, (off, fmt) in PLAYER.items()}
     s = {k: get(blob, player_stat(k), "<f")
          for k in ("hp", "dmg", "crit", "cm", "spd", "luck", "area")}
     print(f"  gold   = {p['gold']}")
@@ -128,6 +132,9 @@ def main():
     args = ap.parse_args()
 
     writes = [(n, getattr(args, n)) for n in WRITABLE if getattr(args, n) is not None]
+    blocked = [n for n, _v in writes if n in PLAYER_UNVERIFIED]
+    if blocked:
+        sys.exit(f"{', '.join(blocked)}: offset not verified on {GAME_VERSION}, refusing to write")
     pid = args.pid or game.find_pid()
     if not pid:
         sys.exit("game window not found")
