@@ -75,7 +75,9 @@ def stat_block(**over):
 
 
 def player_object(level=12, xp=34, hp=900.0, gold=5000, rerolls=3, kills=640, banishes=2,
-                  chest=31, **stats):
+                  chest=31, maxhp=None, **stats):
+    if maxhp is not None:
+        stats["hp"] = maxhp             # the stat block's hp slot is max health
     buf = bytearray(player.OBJ_SIZE)
     for name, val in dict(level=level, xp=xp, hp=hp, gold=gold, rerolls=rerolls,
                           kills=kills, banishes=banishes, chest=chest).items():
@@ -195,6 +197,24 @@ class PlayerTest(unittest.TestCase):
             base, info = player.locate(None)
         self.assertEqual(base, obj)
         self.assertEqual(info["kills"], 640)
+
+    def test_locate_prefers_the_candidate_that_agrees_with_the_hud(self):
+        # v1118: a stray block passed the loose gold gate (level 1, max hp 98,
+        # kills garbage) and won only because it sat at a lower address.
+        mem = FakeMemory()
+        heap = mem.add(0x100000, 8 * SMALL_CHUNK)
+        mem.add(0x200000, SMALL_CHUNK)
+        decoy = heap + 0x40
+        real = heap + 4 * SMALL_CHUNK
+        mem.put(decoy, player_object(level=1, gold=5600, kills=-2147372288, hp=0.0, maxhp=98.0))
+        mem.put(real, player_object())
+        mem.put(0x200000 + 64, HUD_LIVE)
+        with mem.patch():
+            base, _info = player.locate(None)
+        self.assertEqual(base, real)
+        info = game.parse_hud(HUD_LIVE)[0]
+        self.assertEqual(player.hud_score(mem._read(None, real, player.OBJ_SIZE), info), 4)
+        self.assertLessEqual(player.hud_score(mem._read(None, decoy, player.OBJ_SIZE), info), 1)
 
     def test_refuses_to_write_unverified_field(self):
         with mock.patch.object(sys, "argv", ["player.py", "--banishes", "9"]), \

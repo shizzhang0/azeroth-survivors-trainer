@@ -72,6 +72,26 @@ def matches_hud(blob, info):
     return 1 <= lvl < 200 and 50 < mx < 1e6 and 0 <= cur <= mx * 1.2
 
 
+def hud_score(blob, info):
+    """How many HUD numbers this candidate agrees with, 0-4.
+
+    matches_hud() is only a gate: its gold fallback is loose on purpose, so a
+    stray block with a gold-like number can pass it (v1118: level 1, max hp 98,
+    kills garbage, picked over the real hero because it sat at a lower
+    address). The HUD frame is read before a ~30 s sweep, so the run moves on
+    meanwhile — slack is generous, but a wrong block misses by a mile.
+    """
+    def near(field_value, key, slack):
+        return key in info and abs(field_value - info[key]) <= slack(info[key])
+
+    return sum((
+        near(get(blob, *PLAYER["level"]), "level", lambda x: 3),
+        near(get(blob, *PLAYER["kills"]), "kills", lambda x: max(100.0, x * 0.5)),
+        near(get(blob, *PLAYER["gold"]), "gold", lambda x: max(200.0, x * 0.5)),
+        near(get(blob, MAXHP, "<f"), "hpMax", lambda x: max(50.0, x * 0.25)),
+    ))
+
+
 def locate(h):
     """Player object by structural fingerprint, verified against the HUD."""
     # a newer partial frame can carry gold but not kills: insist on a whole one
@@ -79,7 +99,7 @@ def locate(h):
     if not info:
         sys.exit("no HUD frame — is a run in progress?")
 
-    hits, checked = [], set()
+    hits, checked = {}, set()            # address -> HUD score
     for addr, raw in memscan.iter_chunks(h, overlap=FP_OVERLAP):
         idx = memscan.match_fields(memscan.as_f32(raw), FINGERPRINT)
         if not len(idx):
@@ -94,10 +114,12 @@ def locate(h):
             if not blob or len(blob) < OBJ_SIZE or not matches_hud(blob, info):
                 continue
             if not any(abs(a - b) < 512 for b in hits):
-                hits.append(a)
+                hits[a] = hud_score(blob, info)
     if not hits:
         sys.exit("player object not found (run may be paused or just started)")
-    return hits[0], info
+    # best agreement with the HUD wins; ties go to the lower address as before
+    best = max(sorted(hits), key=lambda a: hits[a])
+    return best, info
 
 
 def show(h, base):
