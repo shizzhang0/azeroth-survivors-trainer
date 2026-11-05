@@ -19,16 +19,10 @@ from tkinter import ttk
 import game
 import save
 from offsets import GAME_VERSION
-from session import FIELDS, SPEC, Session, SessionError
+from session import FIELDS, SPEC, UNIT, Session, SessionError, parse, show
 
 REFRESH_MS = 300
 LOST_AFTER = 3          # unreadable refreshes in a row before we call the target gone
-
-
-def fmt_value(name, fmt, v):
-    if fmt == "<i":
-        return str(v)
-    return f"{v:.0f}" if name == "hp" else f"{v:.3f}"
 
 
 class App:
@@ -54,7 +48,7 @@ class App:
         self.status = tk.StringVar(value="进入一局后点“定位游戏”")
         ttk.Label(top, textvariable=self.status).pack(side="left", padx=10)
 
-        stat = ttk.LabelFrame(root, text="属性（游戏会重算，勾“锁定”才持续生效）", padding=8)
+        stat = ttk.LabelFrame(root, text="属性（和游戏角色面板一样的写法；勾“锁定”才持续生效）", padding=8)
         state = ttk.LabelFrame(root, text="状态（写一次就生效）", padding=8)
         stat.grid(row=1, column=0, sticky="n", padx=(10, 5), pady=10)
         state.grid(row=1, column=1, sticky="n", padx=(5, 10), pady=10)
@@ -63,10 +57,16 @@ class App:
                 ttk.Label(frame, text=text, foreground="#666").grid(row=0, column=col, sticky="w")
 
         counts = {"stat": 0, "player": 0}
-        for kind, name, label, fmt, lockable in FIELDS:
+        last_group = None
+        for kind, name, label, _fmt, lockable, unit, group in FIELDS:
             frame = stat if kind == "stat" else state
             counts[kind] += 1
-            self.add_row(frame, counts[kind], kind, name, label, fmt, lockable)
+            if kind == "stat" and group != last_group:      # 角色 / 冒险属性, as in the game
+                ttk.Label(frame, text=group, foreground="#9a6700").grid(
+                    row=counts[kind], column=0, sticky="w", pady=(6, 0))
+                counts[kind] += 1
+            last_group = group
+            self.add_row(frame, counts[kind], kind, name, label, unit, lockable)
 
         ttk.Button(state, text="回满血", command=self.heal).grid(
             row=counts["player"] + 1, column=0, sticky="w", pady=(8, 0))
@@ -87,7 +87,7 @@ class App:
         root.after(REFRESH_MS, self.refresh)
 
     # --- layout -------------------------------------------------------------
-    def add_row(self, frame, r, kind, name, label, fmt, lockable):
+    def add_row(self, frame, r, kind, name, label, unit, lockable):
         key = (kind, name)
         ttk.Label(frame, text=label).grid(row=r, column=0, sticky="w", padx=(0, 8))
         cur = ttk.Label(frame, text="-", width=10, anchor="e")
@@ -96,7 +96,7 @@ class App:
         entry.grid(row=r, column=2, pady=1)
         entry.bind("<Return>", lambda _e: self.on_enter(key))
         lock = tk.BooleanVar(value=False)
-        row = {"cur": cur, "entry": entry, "lock": lock, "fmt": fmt, "widgets": [entry]}
+        row = {"cur": cur, "entry": entry, "lock": lock, "unit": unit, "widgets": [entry]}
         col = 3
         if kind == "player":
             b = ttk.Button(frame, text="写入", width=5, command=lambda: self.write(key))
@@ -194,20 +194,24 @@ class App:
             self.say(val, error=True)
 
     def value_for(self, key):
-        """Entry text, or the current value if the entry is empty."""
+        """Raw value from the entry, typed the way the game writes it ('+50%',
+        '50'); the current value if the entry is empty."""
         row = self.rows[key]
         text = row["entry"].get().strip()
         if not text:
             text = row["cur"].cget("text")
             row["entry"].insert(0, text)
-        return text
+        try:
+            return parse(UNIT[key], text)
+        except ValueError:
+            raise ValueError(f"看不懂“{text}”：填数字，比如 50 或 +50%") from None
 
     def write(self, key):
         try:
             v = self.session.write(*key, self.value_for(key))
             if self.rows[key]["lock"].get():
                 self.session.pin(*key, v)
-            self.say(f"{SPEC[key][0]} → {v}")
+            self.say(f"{SPEC[key][0]} → {show(UNIT[key], v)}")
         except (ValueError, SessionError) as e:
             self.say(str(e), error=True)
 
@@ -216,7 +220,8 @@ class App:
         try:
             if row["lock"].get():
                 v = self.session.pin(*key, self.value_for(key))
-                self.say(f"已锁定 {SPEC[key][0]} = {v}")
+                self.session.write(*key, v)         # take effect now
+                self.say(f"已锁定 {SPEC[key][0]} = {show(UNIT[key], v)}")
             else:
                 self.session.pin(*key, None)
                 self.say(f"已解锁 {SPEC[key][0]}")
@@ -268,7 +273,7 @@ class App:
         self.misses = 0
         pinned = self.session.pinned()
         for key, row in self.rows.items():
-            row["cur"].configure(text=fmt_value(key[1], row["fmt"], vals[key]),
+            row["cur"].configure(text=show(row["unit"], vals[key]),
                                  style="Locked.TLabel" if key in pinned else "TLabel")
 
     def disconnect(self, why=""):

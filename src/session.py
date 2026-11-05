@@ -3,6 +3,7 @@
 No printing and no sys.exit: failures raise SessionError so a UI can show them.
 Locking runs on a background thread; everything else is called from the UI thread.
 """
+import math
 import struct
 import threading
 import time
@@ -13,41 +14,96 @@ import player
 import trainer
 from offsets import PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED, STAT, STAT_READONLY, STAT_TAIL
 
-# (kind, name, label, struct format, lockable)
-#   stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
-#   player — real run state: a single write sticks until the game changes it
+# (kind, name, label, struct format, lockable, unit, group)
+#   kind  stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
+#         player — real run state: a single write sticks until the game changes it
+#   label, order and group follow the game's own character pane (角色 box, then
+#   冒险属性), so a row here reads like the line it changes there.
+#   unit  how the pane shows the raw value; the panels show and take input that way:
+#     num    as is (生命值 447, 回复 3.3, 拾取 31码)       int   whole number
+#     +int   whole number with a sign (目标数 +5)
+#     %      v * 100        (暴击伤害 225%, 护甲 32%, 回响 50%)
+#     %.1    v * 100, one decimal (暴击 26.4%)
+#     +%     v * 100, signed (幸运 +1000%, 增益强度 +44%, 持续伤害急速 +77%)
+#     +%1    (v - 1) * 100  (伤害 +73%, 范围 +15%, 速度 +32%, 经验值 / 金币 +0%)
+#     haste  (1 - v) * 100  (急速 +12%: the stat is a cooldown multiplier)
 FIELDS = [
-    ("stat", "hp", "最大生命", "<f", True),
-    ("stat", "dmg", "伤害倍率", "<f", True),
-    ("stat", "cd", "冷却倍率（越小越快）", "<f", True),
-    ("stat", "crit", "暴击率", "<f", True),
-    ("stat", "cm", "暴击伤害倍率", "<f", True),
-    ("stat", "spd", "移动速度", "<f", True),
-    ("stat", "pick", "拾取半径", "<f", True),
-    ("stat", "xp", "经验倍率", "<f", True),
-    ("stat", "arm", "减伤", "<f", True),
-    ("stat", "reg", "每秒回血", "<f", True),
-    ("stat", "area", "范围倍率", "<f", True),
-    ("stat", "luck", "幸运", "<f", True),
-    ("stat", "gold", "金币倍率", "<f", True),
-    ("stat", "targets", "额外目标数", "<i", True),
-    ("stat", "echo", "回响", "<f", True),
-    ("stat", "heal", "击杀治疗", "<f", True),
-    ("stat", "bp", "增益强度", "<f", True),
-    ("stat", "doth", "持续伤害急速", "<f", True),
-    ("player", "gold", "金币", "<i", True),
-    ("player", "hp", "当前血量", "<f", True),
-    ("player", "level", "等级", "<i", False),    # locking these loops level-ups
-    ("player", "xp", "当前经验", "<i", False),
-    ("player", "kills", "击杀", "<i", False),
-    ("player", "rerolls", "重抽次数", "<i", True),
-    ("player", "banishes", "放逐次数", "<i", True),
-    ("player", "chest", "宝箱价格", "<i", True),
+    ("stat", "hp", "生命值", "<f", True, "num", "角色"),
+    ("stat", "dmg", "伤害", "<f", True, "+%1", "角色"),
+    ("stat", "cd", "急速", "<f", True, "haste", "角色"),
+    ("stat", "crit", "暴击", "<f", True, "%.1", "角色"),
+    ("stat", "cm", "暴击伤害", "<f", True, "%", "角色"),
+    ("stat", "arm", "护甲", "<f", True, "%", "角色"),
+    ("stat", "area", "范围", "<f", True, "+%1", "角色"),
+    ("stat", "targets", "目标数", "<i", True, "+int", "角色"),
+    ("stat", "echo", "回响", "<f", True, "%", "角色"),
+    ("stat", "spd", "速度", "<f", True, "+%1", "角色"),
+    ("stat", "reg", "回复", "<f", True, "num", "角色"),
+    ("stat", "pick", "拾取（码）", "<f", True, "num", "角色"),
+    ("stat", "heal", "击杀治疗", "<f", True, "num", "冒险属性"),
+    ("stat", "xp", "经验值", "<f", True, "+%1", "冒险属性"),
+    ("stat", "gold", "金币", "<f", True, "+%1", "冒险属性"),
+    ("stat", "luck", "幸运", "<f", True, "+%", "冒险属性"),
+    ("stat", "bp", "增益强度", "<f", True, "+%", "冒险属性"),
+    ("stat", "doth", "持续伤害急速", "<f", True, "+%", "冒险属性"),
+    ("player", "gold", "金币数量", "<i", True, "int", "状态"),
+    ("player", "hp", "当前血量", "<f", True, "num", "状态"),
+    ("player", "level", "等级", "<i", False, "int", "状态"),    # locking these loops level-ups
+    ("player", "xp", "当前经验", "<i", False, "int", "状态"),
+    ("player", "kills", "击杀", "<i", False, "int", "状态"),
+    ("player", "rerolls", "重抽次数", "<i", True, "int", "状态"),
+    ("player", "banishes", "放逐次数", "<i", True, "int", "状态"),
+    ("player", "chest", "宝箱价格", "<i", True, "int", "状态"),
 ]
 STAT_ALL = {**STAT, **STAT_TAIL}
 assert all(n in STAT_ALL and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
 assert all(n in PLAYER for k, n, *_ in FIELDS if k == "player")
-SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock in FIELDS}
+SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock, *_ in FIELDS}
+UNIT = {(k, n): unit for k, n, _l, _f, _c, unit, _g in FIELDS}
+
+
+# --- game units <-> raw values (mirrored in addon/AZSRemote/AZSRemote.lua) -----
+def to_game(unit, v):
+    """Raw value -> the number the game's pane shows."""
+    if unit in ("%", "%.1", "+%"):
+        return v * 100.0
+    if unit == "+%1":
+        return (v - 1.0) * 100.0
+    if unit == "haste":
+        return (1.0 - v) * 100.0
+    return v
+
+
+def from_game(unit, x):
+    """A number typed the way the pane shows it -> the raw value to write."""
+    if unit in ("%", "%.1", "+%"):
+        return x / 100.0
+    if unit == "+%1":
+        return 1.0 + x / 100.0
+    if unit == "haste":
+        return 1.0 - x / 100.0
+    return x
+
+
+def show(unit, v):
+    """Raw value -> text like the pane's: '+73%', '26.4%', '+5', '447'."""
+    x = to_game(unit, v)
+    r = math.floor(x + 0.5)              # like the Lua side, not banker's rounding
+    if unit == "%.1":                    # the pane gives crit one decimal: 26.4%
+        s = "%.1f" % x
+    elif unit == "num" and abs(x - r) >= 0.05:
+        s = "%.1f" % x                   # 回复 3.3
+    else:
+        s = "%d" % r                     # every other percentage is whole: +12%, 32%
+    if unit in ("+%", "+%1", "haste", "+int") and x >= 0 and not s.startswith("-"):
+        s = "+" + s
+    return s + ("%" if "%" in unit or unit == "haste" else "")
+
+
+def parse(unit, text):
+    """Input as the pane writes it ('+50%', '50', '-10%') -> raw value."""
+    t = str(text).strip().replace("%", "").replace("+", "").replace("＋", "").replace("％", "")
+    return from_game(unit, float(t))
 FOLLOW_EVERY = 1.0      # seconds between "is ours the one that moves?" checks
 
 

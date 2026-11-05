@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import agent             # noqa: E402
 import addon_mailbox as mb  # noqa: E402
 import memscan           # noqa: E402
+import session              # noqa: E402
 from session import FIELDS   # noqa: E402
 
 LUA_FILE = os.path.join(ROOT, "addon", "AZSRemote", "AZSRemote.lua")
@@ -54,11 +55,42 @@ class ProtocolAgreementTest(unittest.TestCase):
         self.assertEqual(mb.MAGIC[2], mb.LAYOUT_BASE + 1000 * mb.PROTOCOL + mb.N_FIELDS)
 
     def test_field_list_matches_session(self):
-        rows = re.findall(r'\{ "(\w+)", "(\w+)", "([^"]+)", "([if])", (true|false) \}', lua_source())
-        expected = [(k, n, label, "i" if fmt == "<i" else "f", "true" if lock else "false")
-                    for k, n, label, fmt, lock in FIELDS]
+        rows = re.findall(r'\{ "(\w+)", "(\w+)", "([^"]+)", "([if])", (true|false), "([^"]+)", "([^"]+)" \}',
+                          lua_source())
+        expected = [(k, n, label, "i" if fmt == "<i" else "f", "true" if lock else "false", unit, group)
+                    for k, n, label, fmt, lock, unit, group in FIELDS]
         self.assertEqual(rows, expected)
         self.assertEqual(len(FIELDS), mb.N_FIELDS)
+
+
+class GameUnitsTest(unittest.TestCase):
+    """The panels show and take values the way the game's character pane does."""
+
+    def test_shows_like_the_pane(self):
+        # raw values and what the v1118 pane printed for them
+        for unit, raw, text in [
+                ("num", 447.0, "447"), ("+%1", 1.733, "+73%"), ("haste", 0.877, "+12%"),
+                ("%.1", 0.2644, "26.4%"), ("%", 2.254, "225%"), ("%", 0.322, "32%"),
+                ("+%1", 1.147, "+15%"), ("+int", 5, "+5"), ("%", 0.5, "50%"),
+                ("+%1", 1.32, "+32%"), ("num", 30.57, "30.6"), ("num", 33.0, "33"),
+                ("+%1", 5.0, "+400%"), ("+%", 10.0, "+1000%"), ("+%", 0.44, "+44%"),
+                ("+%", 0.77, "+77%"), ("+%1", 1.0, "+0%"), ("int", 790, "790")]:
+            self.assertEqual(session.show(unit, raw), text, (unit, raw))
+
+    def test_parses_what_you_type(self):
+        self.assertAlmostEqual(session.parse("+%1", "+100%"), 2.0)          # 伤害 +100%
+        self.assertAlmostEqual(session.parse("haste", "30"), 0.7)           # 急速 30% = cd 0.7
+        self.assertAlmostEqual(session.parse("+%", "1000"), 10.0)           # 幸运 +1000%
+        self.assertAlmostEqual(session.parse("%", "80%"), 0.8)              # 护甲 80%
+        self.assertEqual(session.parse("+int", "+5"), 5)
+        self.assertAlmostEqual(session.parse("+%1", "-20"), 0.8)
+        with self.assertRaises(ValueError):
+            session.parse("%", "abc")
+
+    def test_round_trip(self):
+        for unit in ("num", "%", "%.1", "+%", "+%1", "haste"):
+            for raw in (0.0, 0.25, 1.0, 1.5, 3.0):
+                self.assertAlmostEqual(session.parse(unit, session.to_game(unit, raw)), raw)
 
 
 class FakeMem:
@@ -373,6 +405,33 @@ class AddonEndToEndTest(unittest.TestCase):
     def tick(self, dt=0.2):
         self.g.Tick(dt)
 
+    def test_lua_units_agree_with_python(self):
+        show_lua, parse_lua = self.g.AZSRemote_Show, self.g.AZSRemote_Parse
+        for unit in ("num", "int", "+int", "%", "%.1", "+%", "+%1", "haste"):
+            for raw in (0.0, 0.2644, 0.322, 0.5, 0.877, 1.0, 1.147, 1.733, 2.254, 5, 10, 30.57, 447):
+                if unit in ("int", "+int") and raw != int(raw):
+                    continue
+                self.assertEqual(show_lua(unit, raw), session.show(unit, raw), (unit, raw))
+            for text in ("50", "+50%", "-10", "26.4%", "1000"):
+                self.assertAlmostEqual(parse_lua(unit, text), session.parse(unit, text), msg=(unit, text))
+        self.assertIsNone(parse_lua("%", "abc"))
+
+    def test_panel_shows_game_units_and_sends_raw(self):
+        haste = [i for i, f in enumerate(FIELDS, 1) if f[:2] == ("stat", "cd")][0]
+        self.g.SlashCmdList["AZSREMOTE"]()
+        eb = self.g["AZSRemoteEdit%d" % haste]
+        eb.SetText(eb, "+30%")                                       # 急速 +30%
+        self.g.Fire(eb, "OnEnterPressed")
+        self.tick()
+        self.assertAlmostEqual(self.mb[mb.ARG2], 0.7)                # cooldown multiplier
+        self.agent.serve_once()
+        self.agent.heartbeat()
+        self.agent.snapshot()
+        self.tick()
+        texts = [str(f._text) for f in self.g.FRAMES.values() if f._text]
+        self.assertIn("+30%", texts)                                 # shown back as the game would
+        self.assertIn("冒险属性", "".join(texts))                     # grouped like the pane
+
     def test_mailbox_layout(self):
         self.assertEqual(tuple(self.mb[i] for i in (1, 2, 3)), mb.MAGIC)
         self.assertEqual(len(list(self.mb.values())), mb.SIZE)
@@ -384,7 +443,7 @@ class AddonEndToEndTest(unittest.TestCase):
     def test_click_lock_goes_round_trip(self):
         luck = [i for i, f in enumerate(FIELDS, 1) if f[:2] == ("stat", "luck")][0]
         self.g.SlashCmdList["AZSREMOTE"]()                          # /azs
-        self.g["AZSRemoteEdit%d" % luck].SetText(self.g["AZSRemoteEdit%d" % luck], "5")
+        self.g["AZSRemoteEdit%d" % luck].SetText(self.g["AZSRemoteEdit%d" % luck], "+500%")   # 幸运 +500% = raw 5
         cb = self.g["AZSRemoteLock%d" % luck]
         cb._checked = 1
         self.g.Fire(cb, "OnClick")

@@ -36,7 +36,7 @@ SIZE = LOCKED + N_FIELDS - 1
 # addon of another version (a run started before an update) has another tag and
 # maybe a shorter array: we must not write into it. Bump PROTOCOL with any slot
 # change (here and in the Lua file).
-PROTOCOL = 2
+PROTOCOL = 3
 LAYOUT_BASE = 1234000.0
 MAGIC = (918273.645, -556677.889, LAYOUT_BASE + 1000 * PROTOCOL + N_FIELDS)
 LUA_SILENT = 5.0         # seconds without LUA_BEAT moving: that array is dead

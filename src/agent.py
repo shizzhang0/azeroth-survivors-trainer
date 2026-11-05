@@ -21,7 +21,7 @@ import game
 import addon_mailbox as mb
 import memscan
 from scan_stores import DEFAULT_EXE
-from session import FIELDS, Session, SessionError
+from session import FIELDS, Session, SessionError, show
 
 TICK = 0.05              # mailbox poll
 SNAPSHOT_EVERY = 0.25    # values written back to the panel
@@ -70,12 +70,14 @@ def handle(session, ready, cmd, arg1, arg2):
         if not 1 <= i <= len(FIELDS):
             return mb.BAD_INPUT, f"field #{i} out of range"
         kind, name, label = FIELDS[i - 1][:3]
+        unit = FIELDS[i - 1][5]
+        # values arrive raw: the panel converts what you type from the game's units
         if cmd == mb.WRITE:
-            return mb.OK, f"{label} = {session.write(kind, name, arg2)}"
+            return mb.OK, f"{label} = {show(unit, session.write(kind, name, arg2))}"
         if cmd == mb.LOCK:
             v = session.pin(kind, name, arg2)
             session.write(kind, name, v)      # take effect now, not at the next tick
-            return mb.OK, f"lock {label} = {v}"
+            return mb.OK, f"lock {label} = {show(unit, v)}"
         if cmd == mb.UNLOCK:
             session.pin(kind, name, None)
             return mb.OK, f"unlock {label}"
