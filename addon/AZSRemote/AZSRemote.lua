@@ -240,7 +240,7 @@ end
 
 -- --- talking to the agent ----------------------------------------------------
 local RESULT_TEXT = { [0] = "完成", [1] = "后台还在定位，稍等", [2] = "输入有误", [3] = "执行失败（看 remote.bat 窗口）" };
-local STATE_TEXT = { [1] = "定位中…", [2] = "已就绪", [3] = "目标失效：开新的一局或点“重新定位”" };
+local STATE_TEXT = { [1] = "定位中…（锁定会自动接上）", [2] = "已就绪", [3] = "角色位置变了，马上自动重新定位…" };
 
 local poll = 0;
 local driver = CreateFrame("Frame");

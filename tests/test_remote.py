@@ -13,6 +13,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -100,6 +101,11 @@ class FakeSession:
     def __init__(self):
         self.connected = True
         self.events = []
+        self.h = 1
+        self.lost = False
+        self.lost_reason = None
+        self.relocated = threading.Event()
+        self.closed = False
         self.pins = {}
         self.writes = []
         self.values = {(k, n): 0.0 for k, n, *_ in FIELDS}
@@ -125,8 +131,37 @@ class FakeSession:
     def heal(self):
         return 500.0
 
+    def relocate(self):
+        self.lost = False
+        self.relocated.set()
+        return 0x1000, 0x2000
+
     def close(self):
-        pass
+        self.closed = True
+
+
+class AgentLifecycleTest(unittest.TestCase):
+    def test_goes_after_a_lost_hero_and_keeps_locks(self):
+        s = FakeSession()
+        s.pin("stat", "luck", 5)
+        a = agent.Agent(session_factory=lambda: s)
+        a.session, a.located_ok = s, True
+        a.maybe_relocate(0)                       # nothing lost: nothing happens
+        self.assertFalse(s.relocated.is_set())
+        s.lost, s.lost_reason, s.connected = True, "0x1000 no longer holds a stat block", False
+        self.assertEqual(a.state(), mb.LOST)
+        a.maybe_relocate(0)
+        self.assertTrue(s.relocated.wait(2))
+        self.assertEqual(s.pins, {("stat", "luck"): 5.0})     # the same session: locks kept
+
+    def test_waits_for_the_game_after_it_closes(self):
+        s = FakeSession()
+        a = agent.Agent(session_factory=lambda: s)
+        a.session, a.pid, a.box, a.located_ok = s, 1234, object(), True
+        with mock.patch.object(memscan.k32, "CloseHandle"):
+            a.game_gone()
+        self.assertTrue(s.closed)
+        self.assertEqual((a.pid, a.box, a.session, a.located_ok), (None, None, None, False))
 
 
 class HandleTest(unittest.TestCase):
