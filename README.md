@@ -37,6 +37,22 @@ uv run --no-project --with numpy python src/gui.py
 5. **下面“存档”**（就是 [`save.py`](#存档工具会改存档)）：特权重置清零、改各职业的印记。
    游戏开着时这里只读、按钮是灰的；**完全退出游戏**后自动变成可改，每次写入都会先备份。
 
+## 游戏内控制器
+
+不想切出游戏的话，用游戏内面板：
+
+1. 双击仓库根目录的 **`remote.bat`**（游戏开没开都行）。它会把插件 `AZSRemote` 装进
+   `benilla-config\AddOns`（第一次装或有更新时），然后在后台等游戏。
+2. **开一局新冒险**（插件在开局时加载），聊天框提示后输入 **`/azs`** 打开面板，面板可以拖动。
+3. 状态显示“定位中…”约 30～60 秒，变绿色“已就绪”后：属性填数值按回车或勾“锁”；状态字段点“写”，能锁的也可以勾“锁”。
+   下面有“回满血”“全部解锁”“重新定位”。
+4. 游戏关闭时后台自动退出；关掉 `remote.bat` 窗口则所有锁定立即停止。
+
+**为什么要单独开一个后台程序**：插件的 Lua 是彻底的沙箱（`io/os/require/package/debug/dofile/loadlib` 全是 nil，
+局内也没有 `LaunchURL`），既改不了数值，也启动不了外部程序。所以反过来，由后台程序在内存里找到插件的“信箱”
+（一个以三个魔数开头、等间距存放的数字数组），读插件写进去的命令、执行、再把结果和当前数值写回去，插件只负责显示。
+协议见 [`src/addon_mailbox.py`](src/addon_mailbox.py)。
+
 ## 命令行
 
 ```bash
@@ -111,13 +127,18 @@ python src/save.py --import plain.txt     # 加密写回
 | `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
 | `src/diffscan.py` | 差分扫描，找未知字段 |
 | `src/save.py` | 存档解密 / 修改 / 加密（**会改存档**，只在游戏关闭时运行） |
+| `addon/AZSRemote/` | 游戏内控制器插件（Lua，`/azs`），由 `agent.py` 自动安装 |
+| `src/agent.py` / `src/addon_mailbox.py` / `remote.bat` | 控制器后台 / 和插件通信的内存信箱协议 / 双击启动 |
 | `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |
 
 ## 测试
 
 ```bash
-python -m unittest discover -s tests -v
+uv run --no-project --with numpy --with lupa python -m unittest discover -s tests -v
 ```
+
+`lupa` 提供一个 Lua 5.1，用来在假的 WoW 界面 API 上直接跑插件，测“点面板 → 信箱 → 后台执行 → 面板显示”的完整来回；
+不装 `lupa` 时这几个测试自动跳过。
 
 ## 版本更新后
 
