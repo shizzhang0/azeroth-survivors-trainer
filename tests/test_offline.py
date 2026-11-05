@@ -216,6 +216,33 @@ class PlayerTest(unittest.TestCase):
         self.assertEqual(player.hud_score(mem._read(None, real, player.OBJ_SIZE), info), 4)
         self.assertLessEqual(player.hud_score(mem._read(None, decoy, player.OBJ_SIZE), info), 1)
 
+    def test_tie_goes_to_the_one_that_moves(self):
+        # v1118, run start: a frozen copy with the same opening numbers sat below
+        # the hero, scored the same, and won the tie by address.
+        mem = FakeMemory()
+        heap = mem.add(0x100000, 8 * SMALL_CHUNK)
+        mem.add(0x200000, SMALL_CHUNK)
+        frozen, hero = heap + 0x40, heap + 4 * SMALL_CHUNK
+        mem.put(frozen, player_object())
+        mem.put(hero, player_object())
+        mem.put(0x200000 + 64, HUD_LIVE)
+
+        def tick(_s):                      # the hero lands a kill while we watch
+            mem.put(hero, player_object(kills=641))
+        with mem.patch(), mock.patch.object(player.time, "sleep", side_effect=tick):
+            self.assertEqual(player.locate_ranked(None)[0], [frozen, hero])
+            base, _info = player.locate(None)
+        self.assertEqual(base, hero)
+
+    def test_tie_with_nothing_moving_keeps_the_lowest(self):
+        mem = FakeMemory()
+        heap = mem.add(0x100000, 8 * SMALL_CHUNK)
+        mem.put(heap + 0x40, player_object())
+        mem.put(heap + 4 * SMALL_CHUNK, player_object())
+        with mem.patch():
+            self.assertIsNone(player.pick_live(None, [heap + 0x40, heap + 4 * SMALL_CHUNK],
+                                               wait=0.05, step=0.01))
+
     def test_refuses_to_write_unverified_field(self):
         with mock.patch.object(sys, "argv", ["player.py", "--banishes", "9"]), \
                 mock.patch.object(offsets, "PLAYER_UNVERIFIED", {"banishes"}), \
@@ -359,6 +386,37 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.s.tick(0), 1)
         self.assertIsNone(self.s.read())
 
+    def test_follows_the_live_look_alike(self):
+        # located on 移动以开始: ours and a twin look the same; once the run starts
+        # ours stays frozen and the twin moves -> switch, keeping the locks
+        twin = self.mem.add(0x60000, 0x2000)
+        self.mem.put(twin, player_object(gold=120, chest=31))
+        self.s.alternates = [twin]
+        self.s.pin("stat", "luck", 5)
+        now = [100.0]
+        with mock.patch.object(session.time, "monotonic", side_effect=lambda: now[0]):
+            self.assertIsNotNone(self.s.read())                 # first look
+            self.mem.put(twin, player_object(gold=125, chest=31, kills=641))
+            now[0] += session.FOLLOW_EVERY + 0.1
+            self.s.read()
+        self.assertEqual(self.s.base, twin)
+        self.assertEqual(self.s.alternates, [self.obj])
+        self.assertTrue(self.s.events and "switched" in self.s.events[0])
+        self.assertIn(("stat", "luck"), self.s.pinned())
+
+    def test_does_not_switch_while_ours_moves(self):
+        twin = self.mem.add(0x60000, 0x2000)
+        self.mem.put(twin, player_object(gold=120, chest=31))
+        self.s.alternates = [twin]
+        now = [100.0]
+        with mock.patch.object(session.time, "monotonic", side_effect=lambda: now[0]):
+            self.s.read()
+            self.mem.put(self.obj, player_object(gold=130, chest=31))     # ours moved
+            self.mem.put(twin, player_object(gold=125, chest=31))         # so did the twin
+            now[0] += session.FOLLOW_EVERY + 0.1
+            self.s.read()
+        self.assertEqual(self.s.base, self.obj)
+
     def test_input_checks(self):
         with self.assertRaises(ValueError):
             self.s.write("player", "gold", "1.5")               # i32 field
@@ -374,7 +432,7 @@ class SessionTest(unittest.TestCase):
 
     def test_locate_failure_is_an_error_not_an_exit(self):
         s = session.Session()
-        with mock.patch.object(game, "find_pid", return_value=42),                 mock.patch.object(memscan, "open_process", return_value=7),                 mock.patch.object(memscan.k32, "CloseHandle") as close,                 mock.patch.object(player, "locate", side_effect=SystemExit("player object not found")):
+        with mock.patch.object(game, "find_pid", return_value=42),                 mock.patch.object(memscan, "open_process", return_value=7),                 mock.patch.object(memscan.k32, "CloseHandle") as close,                 mock.patch.object(player, "locate_ranked", side_effect=SystemExit("player object not found")):
             with self.assertRaisesRegex(session.SessionError, "not found"):
                 s.locate()
         close.assert_called_once_with(7)

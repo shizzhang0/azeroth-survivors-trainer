@@ -222,6 +222,9 @@ class App:
         if self.locating or self.session.base is None:
             return
         vals = None if self.session.lost else self.session.read()
+        while self.session.events:
+            self.say(self.session.events.pop(0))
+            self.status.set(f"已连接  pid {self.session.pid}  ·  玩家对象 0x{self.session.base:X}")
         if vals is None:
             self.misses += 1
             if self.session.lost or self.misses >= LOST_AFTER:
