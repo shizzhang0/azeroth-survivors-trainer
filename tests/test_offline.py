@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import shutil
 import tempfile
+import threading
 import io
 import os
 import struct
@@ -403,6 +404,44 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.s.alternates, [self.obj])
         self.assertTrue(self.s.events and "switched" in self.s.events[0])
         self.assertIn(("stat", "luck"), self.s.pinned())
+
+    def _stop_thread(self):
+        self.s._stop.set()
+        if self.s._thread:
+            self.s._thread.join(timeout=1)
+
+    def test_lost_keeps_locks_and_says_why(self):
+        # the game moved the hero: its old memory stops looking like one
+        self.s.h = 1
+        self.s.interval = 0.001
+        self.s.pin("stat", "luck", 5)                      # also fine with no lock at all
+        self.mem.put(self.obj, bytes(0x2000))
+        t = threading.Thread(target=self.s._run)
+        t.start()
+        t.join(timeout=2)
+        self.assertTrue(self.s.lost)
+        self.assertIn("no longer", self.s.lost_reason)
+        self.assertEqual(self.s.pinned(), {("stat", "luck")})
+
+    def test_relocate_follows_the_hero_without_the_hud(self):
+        self.s.h = 1
+        self.addCleanup(self._stop_thread)
+        self.s.pin("stat", "luck", 5)
+        self.s.read()                                       # remember level/kills/gold/max hp
+        moved = self.mem.add(0x80000, 0x2000)
+        self.mem.put(moved, player_object(gold=125, kills=650, chest=31))   # a bit later
+        self.mem.put(self.obj, bytes(0x2000))
+        self.s.lost = True
+        old, new = self.s.relocate()                        # no HUD in this memory at all
+        self.assertEqual((old, new), (self.obj, moved))
+        self.assertFalse(self.s.lost)
+        self.assertEqual(self.s.pinned(), {("stat", "luck")})
+        self.assertEqual(self.s.read()[("player", "gold")], 125)
+
+    def test_relocate_without_a_hint_needs_the_hud(self):
+        self.s.h = 1
+        with self.assertRaisesRegex(session.SessionError, "HUD"):
+            self.s.relocate()                               # never read, no HUD frame
 
     def test_does_not_switch_while_ours_moves(self):
         twin = self.mem.add(0x60000, 0x2000)

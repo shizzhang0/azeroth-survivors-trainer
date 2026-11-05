@@ -4,8 +4,10 @@
 
 Start it by hand, before or after the game. It keeps the addon installed,
 waits for the game, finds the addon's mailbox in memory, locates the hero, then
-carries out what you click in the in-game panel (/azs) and reports values back.
-It exits when the game closes. Closing this window stops every lock.
+carries out what you click in the in-game panel (AZS button or /azs) and
+reports values back. When the game moves the hero mid-run it finds it again by
+itself and keeps the locks. When the game closes it waits for the next launch;
+closing this window is what stops it (and every lock).
 """
 import ctypes
 import filecmp
@@ -25,6 +27,7 @@ TICK = 0.05              # mailbox poll
 SNAPSHOT_EVERY = 0.25    # values written back to the panel
 HEARTBEAT_EVERY = 0.5
 WAIT_GAME = 2.0
+RELOCATE_RETRY = 5.0  # after a failed relocate
 ADDON = "AZSRemote"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADDON_SRC = os.path.join(REPO, "addon", ADDON)
@@ -93,6 +96,7 @@ class Agent:
         self.last_req = None
         self.locating = False
         self.located_ok = False
+        self.retry_at = 0.0
         self.beat = 0
 
     # --- player object, located off the main loop (it takes ~30 s) ---------------
@@ -119,6 +123,40 @@ class Agent:
                     self.locating = False
 
         threading.Thread(target=work, daemon=True).start()
+
+    def start_relocate(self):
+        """Find the hero again (it moved, or 重新定位 was clicked), keeping locks."""
+        session = self.session
+        if not session or session.h is None:
+            self.start_locate()
+            return
+        self.locating = True
+
+        def work():
+            try:
+                old, new = session.relocate()
+                if session is self.session:
+                    self.located_ok = True
+                    moved = "same place" if old == new else f"moved 0x{old:X} -> 0x{new:X}"
+                    log(f"hero found again ({moved}); locks kept: {len(session.pinned())}")
+            except SessionError as e:
+                log(f"relocate failed: {e} — retrying in {RELOCATE_RETRY:.0f} s")
+                self.retry_at = time.time() + RELOCATE_RETRY
+            except Exception as e:      # noqa: BLE001 — keep the agent alive
+                log(f"relocate crashed: {type(e).__name__}: {e}")
+                self.retry_at = time.time() + RELOCATE_RETRY
+            finally:
+                if session is self.session:
+                    self.locating = False
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def maybe_relocate(self, now):
+        """The game moved the hero mid-run: go after it without being asked."""
+        s = self.session
+        if (s and self.located_ok and s.lost and not self.locating and now >= self.retry_at):
+            log(f"hero lost: {s.lost_reason or 'stat block gone'} — relocating, locks kept")
+            self.start_relocate()
 
     @property
     def ready(self):
@@ -149,7 +187,7 @@ class Agent:
         if req is not None and req != self.last_req:
             cmd, a1, a2 = box.get(mb.CMD), box.get(mb.ARG1), box.get(mb.ARG2)
             if int(cmd) == mb.RELOCATE:
-                self.start_locate()
+                self.start_relocate()
             code, line = handle(self.session, self.ready, cmd, a1, a2)
             log(f"panel: {line}")
             box.set(mb.RESULT, code)
@@ -176,20 +214,24 @@ class Agent:
         self.box.set(mb.HEARTBEAT, self.beat)
 
     # --- main loop ------------------------------------------------------------
+    def game_gone(self):
+        """The game closed: drop everything tied to that process and wait again."""
+        log("game closed — waiting for it to start again (close this window to quit)")
+        self.close_handle()
+        self.pid, self.box, self.located_ok, self.locating = None, None, False, False
+
     def run(self):
-        seen_game = False
         next_snap = next_beat = 0.0
         while True:
             pid = game.find_pid()
             if not pid:
-                if seen_game:
-                    log("game closed — stopping (locks end with it)")
-                    return
+                if self.pid is not None:
+                    self.game_gone()
                 time.sleep(WAIT_GAME)
                 continue
             if pid != self.pid:
                 self.close_handle()
-                self.pid, seen_game = pid, True
+                self.pid = pid
                 self.h = memscan.open_process(pid, write=True)
                 self.box = None
                 log(f"game found (pid {pid})")
@@ -201,6 +243,7 @@ class Agent:
                     time.sleep(WAIT_GAME)
                     continue
             now = time.time()
+            self.maybe_relocate(now)
             self.serve_once()
             if now >= next_beat:
                 self.heartbeat()
@@ -232,7 +275,7 @@ def main():
         sys.exit("another agent is already running")
     if install_addon():
         log(f"installed/updated the addon in {ADDON_DST} — it loads from the next run")
-    log("agent started. In a run, type /azs to open the panel. Ctrl+C or close this window to stop.")
+    log("agent started. In a run, click the AZS button (or /azs). Close this window to stop.")
     agent = Agent()
     try:
         agent.run()

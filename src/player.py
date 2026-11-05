@@ -124,17 +124,21 @@ def locate(h):
     return best, info
 
 
-def locate_ranked(h):
+def locate_ranked(h, info=None):
     """([candidates tied on the best HUD score, lowest address first], hud).
 
     At the start of a run several objects can hold the same opening numbers
     (v1118: a frozen copy at level 1 / gold 0 / kills 0 next to the hero), so a
     tie is not rare; callers break it by watching which one moves.
+
+    `info` stands in for the HUD frame (level/kills/gold/hpMax): pass the hero's
+    last known numbers to find it again after it moved, without the HUD sweep.
     """
-    # a newer partial frame can carry gold but not kills: insist on a whole one
-    info = game.read_hud(h, require=("gold", "kills", "level"))
-    if not info:
-        sys.exit("no HUD frame — is a run in progress?")
+    if info is None:
+        # a newer partial frame can carry gold but not kills: insist on a whole one
+        info = game.read_hud(h, require=("gold", "kills", "level"))
+        if not info:
+            sys.exit("no HUD frame — is a run in progress?")
 
     hits, checked = {}, set()            # address -> HUD score
     for addr, raw in memscan.iter_chunks(h, overlap=FP_OVERLAP):

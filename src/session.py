@@ -85,6 +85,8 @@ class Session:
         self.alternates = []            # tied look-alikes from locate()
         self._sigs, self._next_check = {}, 0.0
         self.events = []                # human-readable notes for the UI / agent log
+        self.lost_reason = None         # why the lock thread gave up, for the log
+        self._last_vals = None          # last good read(): the hint for relocate()
 
     # --- connect ------------------------------------------------------------
     def locate(self):
@@ -107,6 +109,7 @@ class Session:
             memscan.k32.CloseHandle(h)
             raise
         self.pid, self.h, self.base, self.lost = pid, h, base, False
+        self.lost_reason, self._last_vals = None, None
         # look-alikes that tied with it: if ours turns out frozen and one of these
         # starts moving (we located on 移动以开始, say), read() switches over
         self.alternates = [a for a in top if a != base]
@@ -155,8 +158,10 @@ class Session:
         blob = memscan.read(self.h, self.base, player.OBJ_SIZE)
         if not blob or len(blob) < player.OBJ_SIZE or not self.alive(blob):
             return None
-        return {(k, n): struct.unpack_from(fmt, blob, offset(k, n))[0]
+        vals = {(k, n): struct.unpack_from(fmt, blob, offset(k, n))[0]
                 for (k, n), (_l, fmt, _c) in SPEC.items()}
+        self._last_vals = vals
+        return vals
 
     def _follow_live(self):
         """Switch to a tied look-alike if ours stays still while that one moves."""
@@ -212,13 +217,12 @@ class Session:
             return set(self._pins)
 
     def tick(self, misses=0):
-        """One lock pass; returns the new consecutive-miss count."""
-        with self._lock:
-            pins = list(self._pins.items())
-        if not pins:
-            return 0
+        """One pass: is the hero still there? then re-apply the locks.
+        Returns the new consecutive-miss count."""
         if not self.alive():
             return misses + 1
+        with self._lock:
+            pins = list(self._pins.items())
         for (k, n), data in pins:
             memscan.write(self.h, self.base + offset(k, n), data)
         return 0
@@ -228,7 +232,58 @@ class Session:
         while not self._stop.wait(self.interval):
             misses = self.tick(misses)
             if misses >= trainer.MAX_MISSES:
+                # The game moves the hero (Bevy relocates an entity's data when
+                # its components change) or the run ended. Locks are kept for
+                # relocate(); nothing is written meanwhile.
+                self.lost_reason = self._why_dead()
                 self.lost = True
-                with self._lock:
-                    self._pins.clear()
                 return
+
+    def _why_dead(self):
+        raw = memscan.read(self.h, self.base + PLAYER_STAT_BASE, trainer.SPAN * 4)
+        if not raw:
+            return f"0x{self.base:X} is no longer readable"
+        lvl = memscan.read(self.h, self.base + PLAYER["level"][0], 4)
+        lvl = struct.unpack("<i", lvl)[0] if lvl else None
+        return f"0x{self.base:X} no longer holds a stat block (level reads {lvl})"
+
+    # --- find the hero again --------------------------------------------------
+    def _last_known(self):
+        """The hero's numbers from our last good read, shaped like a HUD frame."""
+        v = self._last_vals
+        if not v:
+            return None
+        return {"level": v[("player", "level")], "kills": v[("player", "kills")],
+                "gold": v[("player", "gold")], "hpMax": v[("stat", "hp")]}
+
+    def relocate(self):
+        """Find the hero again after it moved, keeping every lock.
+
+        Scores candidates against the last values we read (one sweep, ~half the
+        time of locate()); falls back to the HUD if that finds nothing, e.g. the
+        run ended and the numbers started over. Returns (old base, new base).
+        """
+        if self.h is None:
+            raise SessionError("还没定位过，先点“定位游戏”")
+        top = None
+        hint = self._last_known()
+        try:
+            if hint:
+                try:
+                    top, _ = player.locate_ranked(self.h, hint)
+                except SystemExit:
+                    top = None
+            if not top:
+                top, _ = player.locate_ranked(self.h)
+        except SystemExit as e:
+            raise SessionError(str(e.code)) from None
+        base = (player.pick_live(self.h, top) if len(top) > 1 else None) or top[0]
+        old, self.base = self.base, base
+        self.alternates = [a for a in top if a != base]
+        self._sigs, self._next_check = {}, 0.0
+        self.lost, self.lost_reason = False, None
+        if not (self._thread and self._thread.is_alive()):
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return old, base

@@ -48,7 +48,7 @@ class App:
 
         top = ttk.Frame(root, padding=(10, 10, 10, 0))
         top.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.locate_btn = ttk.Button(top, text="定位游戏", command=self.locate)
+        self.locate_btn = ttk.Button(top, text="定位游戏", command=self.on_locate_button)
         self.locate_btn.pack(side="left")
         self.bar = ttk.Progressbar(top, mode="indeterminate", length=120)
         self.status = tk.StringVar(value="进入一局后点“定位游戏”")
@@ -120,6 +120,31 @@ class App:
         self.msg_label.configure(style="Err.TLabel" if error else "TLabel")
 
     # --- actions ------------------------------------------------------------
+    def on_locate_button(self):
+        # once connected the button reads 重新定位: find the hero again, keep the locks
+        if self.session.h is not None and self.session.base is not None:
+            self.relocate_async("重新定位中（锁定保留）…")
+        else:
+            self.locate()
+
+    def relocate_async(self, text):
+        self.locating = True
+        self.locate_btn.state(["disabled"])
+        self.bar.pack(side="left", padx=(10, 0))
+        self.bar.start(12)
+        self.status.set(text)
+
+        def work():
+            try:
+                self.results.put(("relocated", self.session.relocate()))
+            except SessionError as e:
+                self.results.put(("err", str(e)))
+            except Exception as e:      # noqa: BLE001
+                self.results.put(("err", f"{type(e).__name__}: {e}"))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.root.after(100, self.poll_locate)
+
     def locate(self):
         self.unlock_all(quiet=True)
         self.set_enabled(False)
@@ -156,6 +181,14 @@ class App:
             self.status.set(f"已连接  pid {self.session.pid}  ·  玩家对象 0x{val:X}")
             self.locate_btn.configure(text="重新定位")
             self.set_enabled(True)
+        elif kind == "relocated":
+            old, new = val
+            self.misses = 0
+            self.status.set(f"已连接  pid {self.session.pid}  ·  玩家对象 0x{new:X}")
+            self.say("角色位置没变" if old == new else
+                     f"角色在内存里换了位置，已重新连上，锁定保留（{len(self.session.pinned())} 项）")
+        elif self.session.base is not None:
+            self.disconnect(val)               # relocate failed: start over by hand
         else:
             self.status.set("没有连上")
             self.say(val, error=True)
@@ -228,7 +261,9 @@ class App:
         if vals is None:
             self.misses += 1
             if self.session.lost or self.misses >= LOST_AFTER:
-                self.disconnect()
+                # usually the game moved the hero (Bevy relocates an entity when its
+                # components change): go after it, locks stay
+                self.relocate_async("角色位置变了，正在自动重新定位（锁定保留）…")
             return
         self.misses = 0
         pinned = self.session.pinned()
@@ -236,15 +271,15 @@ class App:
             row["cur"].configure(text=fmt_value(key[1], row["fmt"], vals[key]),
                                  style="Locked.TLabel" if key in pinned else "TLabel")
 
-    def disconnect(self):
+    def disconnect(self, why=""):
         self.unlock_all(quiet=True)
         self.session.close()
         self.set_enabled(False)
         for row in self.rows.values():
             row["cur"].configure(text="-", style="TLabel")
-        self.status.set("目标失效（对局结束或重开了？）")
+        self.status.set("连不上角色了（游戏关了或对局结束？）")
         self.locate_btn.configure(text="定位游戏")
-        self.say("进入新的一局后重新点“定位游戏”", error=True)
+        self.say((why + " · " if why else "") + "进入一局后重新点“定位游戏”", error=True)
 
     def quit(self):
         self.session.close()
