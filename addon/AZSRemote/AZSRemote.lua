@@ -8,39 +8,42 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
-local PROTOCOL = 2;      -- bump with any slot change, as in src/addon_mailbox.py
+local PROTOCOL = 3;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
 	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 39, SIZE = 64 };
 local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6 };
 
--- kind, name, label, format ("i" whole number / "f" decimal), lockable
+-- kind, name, label, format ("i" whole number / "f" decimal), lockable, unit, group
+-- Labels, order and groups follow the game's character pane; unit says how the
+-- pane writes the value (see src/session.py), and the panel shows and takes
+-- input the same way.
 local FIELDS = {
-	{ "stat", "hp", "最大生命", "f", true },
-	{ "stat", "dmg", "伤害倍率", "f", true },
-	{ "stat", "cd", "冷却倍率（越小越快）", "f", true },
-	{ "stat", "crit", "暴击率", "f", true },
-	{ "stat", "cm", "暴击伤害倍率", "f", true },
-	{ "stat", "spd", "移动速度", "f", true },
-	{ "stat", "pick", "拾取半径", "f", true },
-	{ "stat", "xp", "经验倍率", "f", true },
-	{ "stat", "arm", "减伤", "f", true },
-	{ "stat", "reg", "每秒回血", "f", true },
-	{ "stat", "area", "范围倍率", "f", true },
-	{ "stat", "luck", "幸运", "f", true },
-	{ "stat", "gold", "金币倍率", "f", true },
-	{ "stat", "targets", "额外目标数", "i", true },
-	{ "stat", "echo", "回响", "f", true },
-	{ "stat", "heal", "击杀治疗", "f", true },
-	{ "stat", "bp", "增益强度", "f", true },
-	{ "stat", "doth", "持续伤害急速", "f", true },
-	{ "player", "gold", "金币", "i", true },
-	{ "player", "hp", "当前血量", "f", true },
-	{ "player", "level", "等级", "i", false },
-	{ "player", "xp", "当前经验", "i", false },
-	{ "player", "kills", "击杀", "i", false },
-	{ "player", "rerolls", "重抽次数", "i", true },
-	{ "player", "banishes", "放逐次数", "i", true },
-	{ "player", "chest", "宝箱价格", "i", true },
+	{ "stat", "hp", "生命值", "f", true, "num", "角色" },
+	{ "stat", "dmg", "伤害", "f", true, "+%1", "角色" },
+	{ "stat", "cd", "急速", "f", true, "haste", "角色" },
+	{ "stat", "crit", "暴击", "f", true, "%.1", "角色" },
+	{ "stat", "cm", "暴击伤害", "f", true, "%", "角色" },
+	{ "stat", "arm", "护甲", "f", true, "%", "角色" },
+	{ "stat", "area", "范围", "f", true, "+%1", "角色" },
+	{ "stat", "targets", "目标数", "i", true, "+int", "角色" },
+	{ "stat", "echo", "回响", "f", true, "%", "角色" },
+	{ "stat", "spd", "速度", "f", true, "+%1", "角色" },
+	{ "stat", "reg", "回复", "f", true, "num", "角色" },
+	{ "stat", "pick", "拾取（码）", "f", true, "num", "角色" },
+	{ "stat", "heal", "击杀治疗", "f", true, "num", "冒险属性" },
+	{ "stat", "xp", "经验值", "f", true, "+%1", "冒险属性" },
+	{ "stat", "gold", "金币", "f", true, "+%1", "冒险属性" },
+	{ "stat", "luck", "幸运", "f", true, "+%", "冒险属性" },
+	{ "stat", "bp", "增益强度", "f", true, "+%", "冒险属性" },
+	{ "stat", "doth", "持续伤害急速", "f", true, "+%", "冒险属性" },
+	{ "player", "gold", "金币数量", "i", true, "int", "状态" },
+	{ "player", "hp", "当前血量", "f", true, "num", "状态" },
+	{ "player", "level", "等级", "i", false, "int", "状态" },
+	{ "player", "xp", "当前经验", "i", false, "int", "状态" },
+	{ "player", "kills", "击杀", "i", false, "int", "状态" },
+	{ "player", "rerolls", "重抽次数", "i", true, "int", "状态" },
+	{ "player", "banishes", "放逐次数", "i", true, "int", "状态" },
+	{ "player", "chest", "宝箱价格", "i", true, "int", "状态" },
 };
 
 -- The mailbox. Magic numbers come from tonumber() at runtime, so they exist
@@ -69,14 +72,62 @@ local function send(cmd, field, value)
 	table.insert(queue, { cmd, field or 0, value or 0 });
 end
 
-local function fmt(f, v, name)
-	if ( f == "i" ) then
-		return string.format("%d", v);
+-- --- game units <-> raw values (mirrors to_game/from_game/show/parse in session.py)
+local function toGame(unit, v)
+	if ( unit == "%" or unit == "%.1" or unit == "+%" ) then
+		return v * 100;
+	elseif ( unit == "+%1" ) then
+		return (v - 1) * 100;
+	elseif ( unit == "haste" ) then
+		return (1 - v) * 100;
 	end
-	if ( name == "hp" ) then
-		return string.format("%.0f", v);
+	return v;
+end
+
+local function fromGame(unit, x)
+	if ( unit == "%" or unit == "%.1" or unit == "+%" ) then
+		return x / 100;
+	elseif ( unit == "+%1" ) then
+		return 1 + x / 100;
+	elseif ( unit == "haste" ) then
+		return 1 - x / 100;
 	end
-	return string.format("%.3f", v);
+	return x;
+end
+
+local function round(x)
+	return math.floor(x + 0.5);
+end
+
+-- raw value -> text like the game pane's: "+73%", "26.4%", "+5", "447"
+function AZSRemote_Show(unit, v)
+	local x = toGame(unit, v);
+	local s;
+	if ( unit == "%.1" ) then                -- the pane gives crit one decimal: 26.4%
+		s = string.format("%.1f", x);
+	elseif ( unit == "num" and math.abs(x - round(x)) >= 0.05 ) then
+		s = string.format("%.1f", x);        -- 回复 3.3
+	else
+		s = string.format("%d", round(x));   -- every other percentage is whole
+	end
+	if ( (unit == "+%" or unit == "+%1" or unit == "haste" or unit == "+int")
+			and x >= 0 and string.sub(s, 1, 1) ~= "-" ) then
+		s = "+" .. s;
+	end
+	if ( string.find(unit, "%", 1, true) or unit == "haste" ) then
+		s = s .. "%";
+	end
+	return s;
+end
+
+-- what you typed, the way the pane writes it ("+50%", "50", "-10") -> raw value
+function AZSRemote_Parse(unit, text)
+	local t = string.gsub(text or "", "[%%%+%s]", "");
+	local x = tonumber(t);
+	if ( not x ) then
+		return nil;
+	end
+	return fromGame(unit, x);
 end
 
 -- --- panel -----------------------------------------------------------------
@@ -110,7 +161,7 @@ local close = CreateFrame("Button", "AZSRemoteClose", panel, "UIPanelCloseButton
 close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -6, -6);
 
 local function addRow(i, y)
-	local kind, name, label, f, lockable = FIELDS[i][1], FIELDS[i][2], FIELDS[i][3], FIELDS[i][4], FIELDS[i][5];
+	local kind, label, lockable, unit = FIELDS[i][1], FIELDS[i][3], FIELDS[i][5], FIELDS[i][6];
 	local row = {};
 	local l = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall");
 	l:SetPoint("TOPLEFT", panel, "TOPLEFT", 22, y);
@@ -128,11 +179,12 @@ local function addRow(i, y)
 	eb:SetScript("OnEscapePressed", function() this:ClearFocus(); end);
 	row.edit = eb;
 
+	-- typed in the game's units; sent raw. Empty or junk: keep the current value.
 	local function value()
-		local v = tonumber(eb:GetText());
+		local v = AZSRemote_Parse(unit, eb:GetText());
 		if ( not v ) then
 			v = MB[SLOT.VALUES + i - 1];
-			eb:SetText(fmt(f, v, name));
+			eb:SetText(AZSRemote_Show(unit, v));
 		end
 		return v;
 	end
@@ -178,14 +230,22 @@ local function addRow(i, y)
 	rows[i] = row;
 end
 
+-- rows under headings, as the game groups them: 角色 / 冒险属性 / 状态
 local y = TOP;
 for i = 1, table.getn(FIELDS) do
-	if ( i > 1 and FIELDS[i][1] ~= FIELDS[i - 1][1] ) then
-		y = y - 6;                          -- a gap between stats and run state
+	if ( i == 1 or FIELDS[i][7] ~= FIELDS[i - 1][7] ) then
+		if ( i > 1 ) then
+			y = y - 6;
+		end
+		local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal");
+		h:SetPoint("TOPLEFT", panel, "TOPLEFT", 18, y);
+		h:SetText("|cffffd100" .. FIELDS[i][7] .. "|r");
+		y = y - 18;
 	end
 	addRow(i, y);
 	y = y - ROW_H;
 end
+panel:SetHeight(-y + 60);                  -- room for the buttons at the bottom
 
 local function button(name, text, x, onclick)
 	local b = CreateFrame("Button", name, panel, "UIPanelButtonTemplate");
@@ -301,7 +361,7 @@ driver:SetScript("OnUpdate", function()
 		local busy = waitingFor or table.getn(queue) > 0;   -- don't undo a fresh click
 		for i = 1, table.getn(FIELDS) do
 			local row = rows[i];
-			row.cur:SetText(fmt(FIELDS[i][4], MB[SLOT.VALUES + i - 1], FIELDS[i][2]));
+			row.cur:SetText(AZSRemote_Show(FIELDS[i][6], MB[SLOT.VALUES + i - 1]));
 			if ( row.lock and not busy ) then
 				row.lock:SetChecked(MB[SLOT.LOCKED + i - 1] == 1 and 1 or nil);
 			end
