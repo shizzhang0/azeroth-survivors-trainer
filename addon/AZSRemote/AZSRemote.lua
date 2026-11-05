@@ -193,6 +193,51 @@ button("AZSRemoteHeal", "回满血", 22, function() send(CMD.HEAL); end);
 button("AZSRemoteUnlock", "全部解锁", 124, function() send(CMD.UNLOCK_ALL); end);
 button("AZSRemoteRelocate", "重新定位", 226, function() send(CMD.RELOCATE); end);
 
+-- --- floating toggle button ----------------------------------------------------
+-- Click: open/close the panel. Drag: move it. Its colour is the agent's state.
+local function togglePanel()
+	if ( panel:IsVisible() ) then
+		panel:Hide();
+	else
+		panel:Show();
+	end
+end
+
+local toggle = CreateFrame("Button", "AZSRemoteToggle", UIParent, "UIPanelButtonTemplate");
+toggle:SetWidth(52);
+toggle:SetHeight(22);
+toggle:SetPoint("LEFT", UIParent, "LEFT", 16, 120);
+toggle:SetFrameStrata("HIGH");
+toggle:SetText("AZS");
+toggle:SetMovable(true);
+toggle:RegisterForDrag("LeftButton");
+local dragged = false;
+toggle:SetScript("OnDragStart", function()
+	dragged = true;
+	this:StartMoving();
+end);
+toggle:SetScript("OnDragStop", function()
+	this:StopMovingOrSizing();
+	local point, _, relPoint, x, y = this:GetPoint();
+	AZSRemoteDB = AZSRemoteDB or {};
+	AZSRemoteDB.toggle = { point, relPoint, x, y };   -- kept if the game saves SavedVariables
+end);
+toggle:SetScript("OnClick", function()
+	if ( dragged ) then                     -- the release that ends a drag is not a click
+		dragged = false;
+		return;
+	end
+	togglePanel();
+end);
+
+local function paintToggle(connected, st)
+	local colour = "|cffff5555";            -- red: agent not running
+	if ( connected ) then
+		colour = (st == 2) and "|cff55ff55" or "|cffffd100";
+	end
+	toggle:SetText(colour .. "AZS|r");
+end
+
 -- --- talking to the agent ----------------------------------------------------
 local RESULT_TEXT = { [0] = "完成", [1] = "后台还在定位，稍等", [2] = "输入有误", [3] = "执行失败（看 remote.bat 窗口）" };
 local STATE_TEXT = { [1] = "定位中…", [2] = "已就绪", [3] = "目标失效：开新的一局或点“重新定位”" };
@@ -227,6 +272,7 @@ driver:SetScript("OnUpdate", function()
 		waitingFor = MB[SLOT.REQ];
 	end
 
+	paintToggle(connected, MB[SLOT.STATE]);
 	if ( not panel:IsVisible() ) then
 		return;
 	end
@@ -253,17 +299,16 @@ driver:SetScript("OnUpdate", function()
 end);
 
 SLASH_AZSREMOTE1 = "/azs";
-SlashCmdList["AZSREMOTE"] = function()
-	if ( panel:IsVisible() ) then
-		panel:Hide();
-	else
-		panel:Show();
-	end
-end;
+SlashCmdList["AZSREMOTE"] = togglePanel;
 
 local hello = CreateFrame("Frame");
 hello:RegisterEvent("PLAYER_ENTERING_WORLD");
 hello:SetScript("OnEvent", function()
-	say("控制器已加载：输入 /azs 打开（需要先运行 remote.bat）");
+	local saved = AZSRemoteDB and AZSRemoteDB.toggle;
+	if ( saved and saved[1] ) then
+		toggle:ClearAllPoints();
+		toggle:SetPoint(saved[1], UIParent, saved[2], saved[3], saved[4]);
+	end
+	say("控制器已加载：点屏幕左侧的 AZS 按钮打开（也可以 /azs）。需要先运行 remote.bat");
 	this:UnregisterEvent("PLAYER_ENTERING_WORLD");
 end);
