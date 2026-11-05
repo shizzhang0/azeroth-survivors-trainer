@@ -29,6 +29,7 @@ import trainer         # noqa: E402
 import verify_layout   # noqa: E402
 
 SMALL_CHUNK = 0x1000   # tiny chunks so structs straddle chunk boundaries
+game.HUD_WATCH = 0     # fake memory never changes on its own: don't wait to watch it
 
 
 class FakeMemory:
@@ -151,6 +152,36 @@ class HudTest(unittest.TestCase):
             hud = game.read_hud(None, require=("gold",))
         self.assertEqual(hud["gold"], 5000)
 
+    @staticmethod
+    def frame(t, level, kills, gold):
+        return (b'{"type":"hud","time":%.1f,"level":%d,"hpMax":500,"gold":%d,"kills":%d}'
+                % (t, level, gold, kills)).ljust(200, b"\0")
+
+    def test_live_run_beats_a_longer_earlier_run(self):
+        # v1118, many runs in one session: a level-49 frame at 951 s lingered and
+        # outranked the current 116 s run on time
+        mem = FakeMemory()
+        base = mem.add(0x40000, SMALL_CHUNK)
+        mem.put(base, self.frame(951.9, 49, 5982, 2935))
+        live_at = base + 0x400
+        mem.put(live_at, self.frame(116.7, 11, 242, 166))
+
+        def game_moves_on(_s):                  # the live buffer is rewritten meanwhile
+            mem.put(live_at, self.frame(117.5, 11, 245, 170))
+        with mem.patch(), mock.patch.object(game.time, "sleep", side_effect=game_moves_on):
+            hud = game.read_hud(None, require=("gold", "kills", "level"), watch=0.5)
+        self.assertEqual((hud["level"], hud["kills"]), (11, 245))
+
+    def test_paused_game_falls_back_to_the_run_with_most_frames(self):
+        mem = FakeMemory()
+        base = mem.add(0x40000, SMALL_CHUNK)
+        mem.put(base, self.frame(951.9, 49, 5982, 2935))
+        for k, t in enumerate((110.0, 112.0, 116.7)):
+            mem.put(base + 0x200 * (k + 1), self.frame(t, 11, 200 + k, 150))
+        with mem.patch():
+            hud = game.read_hud(None, require=("gold",), watch=0)
+        self.assertEqual(hud["time"], 116.7)
+
 
 class TrainerTest(unittest.TestCase):
     def setUp(self):
@@ -180,7 +211,10 @@ class TrainerTest(unittest.TestCase):
         (name, off, data), = trainer.parse_specs(["luck=5"])
         self.assertEqual((name, off), ("luck", offsets.STAT["luck"]))
         self.assertEqual(np.frombuffer(data, np.float32)[0], 5.0)
-        for bad in ("x36=1", "nope=1", "dmg", "dmg=abc"):
+        (name, off, data), = trainer.parse_specs(["targets=7"])
+        self.assertEqual((name, off), ("targets", 56))
+        self.assertEqual(np.frombuffer(data, np.int32)[0], 7)            # i32, not f32
+        for bad in ("x36=1", "nope=1", "dmg", "dmg=abc", "targets=1.5"):
             with self.assertRaises(SystemExit, msg=bad):
                 trainer.parse_specs([bad])
 
@@ -442,6 +476,18 @@ class SessionTest(unittest.TestCase):
         self.s.h = 1
         with self.assertRaisesRegex(session.SessionError, "HUD"):
             self.s.relocate()                               # never read, no HUD frame
+
+    def test_tail_fields_and_integer_targets(self):
+        # v1118 pane: +56 is 目标数 (i32), +60 回响, +64 击杀治疗, +68 增益强度, +76 持续伤害急速
+        self.assertEqual(self.s.write("stat", "targets", "7"), 7)
+        raw = self.mem._read(None, self.obj + offsets.PLAYER_STAT_BASE + 56, 4)
+        self.assertEqual(struct.unpack("<i", raw)[0], 7)
+        self.s.write("stat", "echo", 0.22)
+        v = self.s.read()
+        self.assertEqual(v[("stat", "targets")], 7)
+        self.assertAlmostEqual(v[("stat", "echo")], 0.22, places=5)
+        with self.assertRaises(ValueError):
+            self.s.write("stat", "targets", 1.5)
 
     def test_does_not_switch_while_ours_moves(self):
         twin = self.mem.add(0x60000, 0x2000)

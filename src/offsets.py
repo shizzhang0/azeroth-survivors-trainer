@@ -47,11 +47,15 @@ STAT_LAYOUTS = {
 }
 STAT = STAT_LAYOUTS[GAME_VERSION]
 
-# Tail fields: NOT re-verified after the v1033 shift, assumed +4 from the old build.
-STAT_TAIL = {"echo": 60, "heal": 64, "bp": 68, "doth": 76}
+# Tail fields. v1118: confirmed by pinning marker values and reading the
+# character pane (目标数 +7, 回响 22%, 击杀治疗 33, 增益强度 +44%, 持续伤害急速 +77%).
+STAT_TAIL = {"targets": 56, "echo": 60, "heal": 64, "bp": 68, "doth": 76}
+STAT_INT = {"targets"}      # i32, not f32: extra targets per spell
+# +72 is 0 and a marker of 55 changed nothing on the pane: unknown, never written.
+# Lifesteal, thorns, lives and DoT stacks are not in this block.
 
-# Never written by the tools: x36 holds 0.6, the panel doesn't show it and
-# writing it changed nothing visible (not lifesteal). Meaning unknown.
+# Never written by the tools: x36 holds 0.6. v1118: markers 0.07 and 3.0 left the
+# pane's 生命偷取 at 0.6%, so despite the match it is not lifesteal. Meaning unknown.
 STAT_READONLY = {"x36"}
 
 # Plausible ranges (inclusive) a live stat block satisfies. Deliberately wide:

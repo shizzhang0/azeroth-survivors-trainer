@@ -21,7 +21,7 @@ import numpy as np
 
 import game
 import memscan
-from offsets import HP_RANGE, STAT, STAT_RANGES, STAT_READONLY, STAT_TAIL
+from offsets import HP_RANGE, STAT, STAT_INT, STAT_RANGES, STAT_READONLY, STAT_TAIL
 
 FIELDS = {**STAT, **STAT_TAIL}
 SPAN = max(FIELDS.values()) // 4 + 1        # floats per stat block (incl. tail)
@@ -86,7 +86,12 @@ def parse_specs(specs):
             val = float(v)
         except ValueError:
             sys.exit(f"bad value in {spec!r}: not a number")
-        out.append((k, FIELDS[k], np.float32(val).tobytes()))
+        if k in STAT_INT:               # e.g. targets: a whole number, stored as i32
+            if val != int(val):
+                sys.exit(f"bad value in {spec!r}: {k} needs a whole number")
+            out.append((k, FIELDS[k], np.int32(int(val)).tobytes()))
+        else:
+            out.append((k, FIELDS[k], np.float32(val).tobytes()))
     return out
 
 
@@ -113,7 +118,7 @@ def pin(h, copies, pins, interval, skip):
     misses = dict.fromkeys(copies, 0)
     print(f"pinning every {interval:g} s (ctrl+c to stop):")
     for k, _off, data in pins:
-        print(f"  {k} -> {float(np.frombuffer(data, np.float32)[0]):g}")
+        print(f"  {k} -> {float(np.frombuffer(data, np.int32 if k in STAT_INT else np.float32)[0]):g}")
     sys.stdout.flush()
     try:
         while True:
