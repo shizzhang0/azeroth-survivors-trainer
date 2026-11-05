@@ -8,8 +8,9 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
+local PROTOCOL = 2;      -- bump with any slot change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
-	HEARTBEAT = 10, STATE = 11, VALUES = 12, LOCKED = 33, SIZE = 53 };
+	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 39, SIZE = 64 };
 local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6 };
 
 -- kind, name, label, format ("i" whole number / "f" decimal), lockable
@@ -27,6 +28,11 @@ local FIELDS = {
 	{ "stat", "area", "范围倍率", "f", true },
 	{ "stat", "luck", "幸运", "f", true },
 	{ "stat", "gold", "金币倍率", "f", true },
+	{ "stat", "targets", "额外目标数", "i", true },
+	{ "stat", "echo", "回响", "f", true },
+	{ "stat", "heal", "击杀治疗", "f", true },
+	{ "stat", "bp", "增益强度", "f", true },
+	{ "stat", "doth", "持续伤害急速", "f", true },
 	{ "player", "gold", "金币", "i", true },
 	{ "player", "hp", "当前血量", "f", true },
 	{ "player", "level", "等级", "i", false },
@@ -45,7 +51,7 @@ for i = 1, SLOT.SIZE do
 end
 AZSRemote_MB[1] = tonumber("918273.645");
 AZSRemote_MB[2] = tonumber("-556677.889");
-AZSRemote_MB[3] = tonumber("1234567.125");
+AZSRemote_MB[3] = tonumber("1234000") + 1000 * PROTOCOL + table.getn(FIELDS);   -- layout tag
 local MB = AZSRemote_MB;
 
 local queue = {};
@@ -174,7 +180,7 @@ end
 
 local y = TOP;
 for i = 1, table.getn(FIELDS) do
-	if ( i == 14 ) then
+	if ( i > 1 and FIELDS[i][1] ~= FIELDS[i - 1][1] ) then
 		y = y - 6;                          -- a gap between stats and run state
 	end
 	addRow(i, y);
@@ -250,6 +256,11 @@ driver:SetScript("OnUpdate", function()
 		return;
 	end
 	poll = 0;
+	-- "this array is alive": stale arrays of earlier runs stay in memory
+	MB[SLOT.LUA_BEAT] = MB[SLOT.LUA_BEAT] + 1;
+	if ( MB[SLOT.LUA_BEAT] > 1000000 ) then
+		MB[SLOT.LUA_BEAT] = 1;
+	end
 	local now = GetTime();
 	if ( MB[SLOT.HEARTBEAT] ~= lastBeat ) then
 		lastBeat, lastBeatAt = MB[SLOT.HEARTBEAT], now;

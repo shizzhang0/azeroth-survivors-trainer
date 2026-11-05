@@ -40,14 +40,18 @@ class ProtocolAgreementTest(unittest.TestCase):
     def test_slots_and_commands_match(self):
         src = lua_source()
         slots = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local SLOT = \{(.*?)\};", src, re.S).group(1)))
-        for name in ("REQ", "CMD", "ARG1", "ARG2", "ACK", "RESULT", "HEARTBEAT", "STATE",
+        for name in ("REQ", "CMD", "ARG1", "ARG2", "ACK", "RESULT", "HEARTBEAT", "STATE", "LUA_BEAT",
                      "VALUES", "LOCKED", "SIZE"):
             self.assertEqual(int(slots[name]), getattr(mb, name), name)
         cmds = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local CMD = \{(.*?)\};", src, re.S).group(1)))
         for name in ("WRITE", "LOCK", "UNLOCK", "HEAL", "UNLOCK_ALL", "RELOCATE"):
             self.assertEqual(int(cmds[name]), getattr(mb, name), name)
-        magics = [float(m) for m in re.findall(r'AZSRemote_MB\[\d\] = tonumber\("([-\d.]+)"\)', src)]
-        self.assertEqual(tuple(magics), mb.MAGIC)
+        magics = [float(m) for m in re.findall(r'AZSRemote_MB\[\d\] = tonumber\("([-\d.]+)"\);', src)]
+        self.assertEqual(tuple(magics), mb.MAGIC[:2])
+        # the layout tag is computed by the addon from its protocol and field list
+        self.assertIn('AZSRemote_MB[3] = tonumber("1234000") + 1000 * PROTOCOL + table.getn(FIELDS);', src)
+        self.assertEqual(int(re.search(r"local PROTOCOL = (\d+);", src).group(1)), mb.PROTOCOL)
+        self.assertEqual(mb.MAGIC[2], mb.LAYOUT_BASE + 1000 * mb.PROTOCOL + mb.N_FIELDS)
 
     def test_field_list_matches_session(self):
         rows = re.findall(r'\{ "(\w+)", "(\w+)", "([^"]+)", "([if])", (true|false) \}', lua_source())
@@ -95,6 +99,101 @@ class MailboxFindTest(unittest.TestCase):
             self.assertEqual(box.get(mb.HEARTBEAT), 7.0)
             mem.buf[base - mem.base:base - mem.base + 8] = bytes(8)   # UI reloaded
             self.assertFalse(box.valid())
+
+    def test_current_addon_wins_over_a_stale_older_one(self):
+        # the last run's array lingers at a lower address; this run's is further on
+        mem = FakeMem(0x10000, 0x3000)
+        for base, tag in ((0x10100, 1234567.125), (0x12200, mb.MAGIC[2])):
+            for k, v in enumerate((mb.MAGIC[0], mb.MAGIC[1], tag)):
+                o = base - mem.base + k * 8
+                mem.buf[o:o + 8] = struct.pack("<d", v)
+        with mem.patch():
+            box = mb.find(None)
+        self.assertEqual(box.base, 0x12200)
+        self.assertTrue(box.compatible)
+
+    def test_live_array_wins_over_a_dead_one_of_the_same_version(self):
+        # several runs with the same addon: the earlier arrays keep their magics
+        mem = FakeMem(0x10000, 0x3000)
+        dead, live = 0x10100, 0x12200
+        for base in (dead, live):
+            for k, v in enumerate(mb.MAGIC):
+                o = base - mem.base + k * 8
+                mem.buf[o:o + 8] = struct.pack("<d", v)
+        beat_at = live - mem.base + (mb.LUA_BEAT - 1) * 8
+
+        def lua_ticks(_s):
+            n = struct.unpack("<d", bytes(mem.buf[beat_at:beat_at + 8]))[0]
+            mem.buf[beat_at:beat_at + 8] = struct.pack("<d", n + 1)
+        with mem.patch(), mock.patch.object(mb.time, "sleep", side_effect=lua_ticks):
+            self.assertEqual(mb.find(None).base, live)
+
+    def test_agent_notices_the_addon_going_quiet(self):
+        mem = FakeMem(0x10000, 0x1000)
+        with mem.patch():
+            a = agent.Agent(session_factory=FakeSession)
+            a.box = mb.Mailbox(None, 0x10100, 8)
+            a.lua_beat, a.lua_beat_at = a.box.get(mb.LUA_BEAT), 100.0
+            self.assertFalse(a.lua_silent(100.0 + mb.LUA_SILENT - 1))
+            self.assertTrue(a.lua_silent(100.0 + mb.LUA_SILENT + 1))
+            a.box.set(mb.LUA_BEAT, 7)                        # it ticked again
+            self.assertFalse(a.lua_silent(100.0 + mb.LUA_SILENT + 2))
+
+    def _two_arrays(self):
+        mem = FakeMem(0x10000, 0x3000)
+        for base in (0x10100, 0x12200):
+            for k, v in enumerate(mb.MAGIC):
+                o = base - mem.base + k * 8
+                mem.buf[o:o + 8] = struct.pack("<d", v)
+        return mem
+
+    def test_quiet_addon_keeps_connection_and_locks(self):
+        # game in the background: no array ticks; ours stays, locks stay
+        mem = self._two_arrays()
+        s = FakeSession()
+        s.pin("stat", "luck", 5)
+        with mem.patch(), mock.patch.object(mb.time, "sleep"), \
+                mock.patch.object(agent.time, "sleep"), mock.patch.object(agent, "log"):
+            a = agent.Agent(session_factory=lambda: s)
+            a.session, a.located_ok = s, True
+            a.box = mb.Mailbox(None, 0x10100, 8)
+            a.check_quiet_addon()
+            self.assertEqual(a.box.base, 0x10100)
+            self.assertEqual(s.pins, {("stat", "luck"): 5.0})
+
+    def test_quiet_addon_switches_to_a_ticking_new_run(self):
+        mem = self._two_arrays()
+        new_beat = 0x12200 - mem.base + (mb.LUA_BEAT - 1) * 8
+
+        def tick(_s):
+            n = struct.unpack("<d", bytes(mem.buf[new_beat:new_beat + 8]))[0]
+            mem.buf[new_beat:new_beat + 8] = struct.pack("<d", n + 1)
+        with mem.patch(), mock.patch.object(mb.time, "sleep", side_effect=tick), \
+                mock.patch.object(agent.time, "sleep", side_effect=tick), mock.patch.object(agent, "log"):
+            a = agent.Agent(session_factory=FakeSession)
+            a.box = mb.Mailbox(None, 0x10100, 8)
+            a.check_quiet_addon()
+            self.assertIsNone(a.box)                          # the loop re-attaches to the new one
+
+    def test_older_addon_is_found_but_never_touched(self):
+        # a run that started before the addon was updated: 21 fields, old tag
+        mem = FakeMem(0x10000, 0x2000)
+        base, stride = 0x10100, 8
+        for k, v in enumerate((mb.MAGIC[0], mb.MAGIC[1], 1234567.125)):
+            mem.buf[base - mem.base + k * stride:base - mem.base + k * stride + 8] = struct.pack("<d", v)
+        before = bytes(mem.buf)
+        with mem.patch():
+            box = mb.find(None)
+            self.assertFalse(box.compatible)
+            self.assertIn("21 fields", box.describe())
+            a = agent.Agent(session_factory=FakeSession)
+            a.h = None
+            with mock.patch.object(agent, "log") as log:
+                self.assertFalse(a.attach())
+                self.assertFalse(a.attach())                    # reported once, not every retry
+            self.assertIsNone(a.box)
+            self.assertEqual(sum("different version" in c.args[0] for c in log.call_args_list), 1)
+        self.assertEqual(bytes(mem.buf), before)                # not a byte written
 
 
 class FakeSession:
@@ -277,6 +376,10 @@ class AddonEndToEndTest(unittest.TestCase):
     def test_mailbox_layout(self):
         self.assertEqual(tuple(self.mb[i] for i in (1, 2, 3)), mb.MAGIC)
         self.assertEqual(len(list(self.mb.values())), mb.SIZE)
+        before = self.mb[mb.LUA_BEAT]
+        self.tick()
+        self.tick()
+        self.assertEqual(self.mb[mb.LUA_BEAT], before + 2)          # the addon's own heartbeat
 
     def test_click_lock_goes_round_trip(self):
         luck = [i for i, f in enumerate(FIELDS, 1) if f[:2] == ("stat", "luck")][0]

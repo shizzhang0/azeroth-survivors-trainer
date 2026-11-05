@@ -11,7 +11,7 @@ import game
 import memscan
 import player
 import trainer
-from offsets import PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED, STAT, STAT_READONLY
+from offsets import PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED, STAT, STAT_READONLY, STAT_TAIL
 
 # (kind, name, label, struct format, lockable)
 #   stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
@@ -30,6 +30,11 @@ FIELDS = [
     ("stat", "area", "范围倍率", "<f", True),
     ("stat", "luck", "幸运", "<f", True),
     ("stat", "gold", "金币倍率", "<f", True),
+    ("stat", "targets", "额外目标数", "<i", True),
+    ("stat", "echo", "回响", "<f", True),
+    ("stat", "heal", "击杀治疗", "<f", True),
+    ("stat", "bp", "增益强度", "<f", True),
+    ("stat", "doth", "持续伤害急速", "<f", True),
     ("player", "gold", "金币", "<i", True),
     ("player", "hp", "当前血量", "<f", True),
     ("player", "level", "等级", "<i", False),    # locking these loops level-ups
@@ -39,7 +44,8 @@ FIELDS = [
     ("player", "banishes", "放逐次数", "<i", True),
     ("player", "chest", "宝箱价格", "<i", True),
 ]
-assert all(n in STAT and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
+STAT_ALL = {**STAT, **STAT_TAIL}
+assert all(n in STAT_ALL and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
 assert all(n in PLAYER for k, n, *_ in FIELDS if k == "player")
 SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock in FIELDS}
 FOLLOW_EVERY = 1.0      # seconds between "is ours the one that moves?" checks
@@ -51,7 +57,7 @@ class SessionError(Exception):
 
 def offset(kind, name):
     """Byte offset of a field from the player-object base."""
-    return PLAYER_STAT_BASE + STAT[name] if kind == "stat" else PLAYER[name][0]
+    return PLAYER_STAT_BASE + STAT_ALL[name] if kind == "stat" else PLAYER[name][0]
 
 
 def coerce(kind, name, value):
