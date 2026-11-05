@@ -275,6 +275,27 @@ class AddonEndToEndTest(unittest.TestCase):
         self.agent.serve_once()
         self.assertIn(("player", "chest", 1.0), self.session.writes)
 
+    def test_floating_button_toggles_and_shows_agent_state(self):
+        btn, panel = self.g.AZSRemoteToggle, self.g.AZSRemoteFrame
+        self.assertFalse(panel._shown)
+        self.g.Fire(btn, "OnClick")
+        self.assertTrue(panel._shown)
+        self.g.Fire(btn, "OnClick")
+        self.assertFalse(panel._shown)
+        self.g.Fire(btn, "OnDragStart")                          # a drag ...
+        self.g.Fire(btn, "OnDragStop")
+        self.g.Fire(btn, "OnClick")                              # ... ends in a release, not a click
+        self.assertFalse(panel._shown)
+        self.g.Fire(btn, "OnClick")
+        self.assertTrue(panel._shown)
+
+        self.tick()
+        self.assertTrue(str(btn._text).startswith("|cffff5555"))      # red: no agent
+        self.agent.heartbeat()
+        self.agent.snapshot()
+        self.tick()
+        self.assertTrue(str(btn._text).startswith("|cff55ff55"))      # green: ready
+
     def test_requests_queue_one_at_a_time(self):
         self.g.Fire(self.g.AZSRemoteHeal, "OnClick")
         self.g.Fire(self.g.AZSRemoteUnlock, "OnClick")

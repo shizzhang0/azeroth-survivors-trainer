@@ -1,4 +1,5 @@
 ## Interface: 11200
 ## Title: AZS Remote
-## Notes: In-game panel for the azeroth-survivors-trainer agent (run remote.bat). /azs
+## Notes: In-game panel for the azeroth-survivors-trainer agent (run remote.bat). AZS button or /azs
+## SavedVariables: AZSRemoteDB
 AZSRemote.lua
