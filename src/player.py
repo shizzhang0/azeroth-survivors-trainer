@@ -92,8 +92,45 @@ def hud_score(blob, info):
     ))
 
 
+def signature(h, base):
+    """Bytes that move while the hero plays: level, xp, hp, gold, kills, max hp."""
+    out = []
+    for off, size in sorted({(PLAYER[k][0], 4) for k in ("level", "xp", "hp", "gold", "kills")}
+                            | {(MAXHP, 4)}):
+        raw = memscan.read(h, base + off, size)
+        out.append(raw or b"")
+    return b"".join(out)
+
+
+def pick_live(h, cands, wait=2.0, step=0.25):
+    """Of identical-looking candidates, the first whose run state changes within
+    `wait` seconds, or None (game paused, e.g. on 移动以开始)."""
+    first = {a: signature(h, a) for a in cands}
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < wait:
+        time.sleep(step)
+        for a in cands:
+            if signature(h, a) != first[a]:
+                return a
+    return None
+
+
 def locate(h):
     """Player object by structural fingerprint, verified against the HUD."""
+    top, info = locate_ranked(h)
+    best = top[0]
+    if len(top) > 1:
+        best = pick_live(h, top) or best
+    return best, info
+
+
+def locate_ranked(h):
+    """([candidates tied on the best HUD score, lowest address first], hud).
+
+    At the start of a run several objects can hold the same opening numbers
+    (v1118: a frozen copy at level 1 / gold 0 / kills 0 next to the hero), so a
+    tie is not rare; callers break it by watching which one moves.
+    """
     # a newer partial frame can carry gold but not kills: insist on a whole one
     info = game.read_hud(h, require=("gold", "kills", "level"))
     if not info:
@@ -117,9 +154,9 @@ def locate(h):
                 hits[a] = hud_score(blob, info)
     if not hits:
         sys.exit("player object not found (run may be paused or just started)")
-    # best agreement with the HUD wins; ties go to the lower address as before
-    best = max(sorted(hits), key=lambda a: hits[a])
-    return best, info
+    # best agreement with the HUD wins; ties keep the lower address first
+    top_score = max(hits.values())
+    return sorted(a for a in hits if hits[a] == top_score), info
 
 
 def show(h, base):

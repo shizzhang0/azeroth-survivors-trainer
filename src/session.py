@@ -5,6 +5,7 @@ Locking runs on a background thread; everything else is called from the UI threa
 """
 import struct
 import threading
+import time
 
 import game
 import memscan
@@ -41,6 +42,7 @@ FIELDS = [
 assert all(n in STAT and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
 assert all(n in PLAYER for k, n, *_ in FIELDS if k == "player")
 SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock in FIELDS}
+FOLLOW_EVERY = 1.0      # seconds between "is ours the one that moves?" checks
 
 
 class SessionError(Exception):
@@ -80,6 +82,9 @@ class Session:
         self._stop = threading.Event()
         self._thread = None
         self.lost = False               # set by the lock thread when the target goes away
+        self.alternates = []            # tied look-alikes from locate()
+        self._sigs, self._next_check = {}, 0.0
+        self.events = []                # human-readable notes for the UI / agent log
 
     # --- connect ------------------------------------------------------------
     def locate(self):
@@ -93,7 +98,8 @@ class Session:
         except OSError as e:
             raise SessionError(f"打不开游戏进程 {pid}：{e}") from None
         try:
-            base, _hud = player.locate(h)
+            top, _hud = player.locate_ranked(h)
+            base = (player.pick_live(h, top) if len(top) > 1 else None) or top[0]
         except SystemExit as e:        # player.locate reports failure by exiting
             memscan.k32.CloseHandle(h)
             raise SessionError(str(e.code)) from None
@@ -101,6 +107,10 @@ class Session:
             memscan.k32.CloseHandle(h)
             raise
         self.pid, self.h, self.base, self.lost = pid, h, base, False
+        # look-alikes that tied with it: if ours turns out frozen and one of these
+        # starts moving (we located on 移动以开始, say), read() switches over
+        self.alternates = [a for a in top if a != base]
+        self._sigs, self._next_check = {}, 0.0
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -141,11 +151,29 @@ class Session:
         """{(kind, name): value} for every field, or None if the target is gone."""
         if not self.connected:
             return None
+        self._follow_live()
         blob = memscan.read(self.h, self.base, player.OBJ_SIZE)
         if not blob or len(blob) < player.OBJ_SIZE or not self.alive(blob):
             return None
         return {(k, n): struct.unpack_from(fmt, blob, offset(k, n))[0]
                 for (k, n), (_l, fmt, _c) in SPEC.items()}
+
+    def _follow_live(self):
+        """Switch to a tied look-alike if ours stays still while that one moves."""
+        if not self.alternates or time.monotonic() < self._next_check:
+            return
+        self._next_check = time.monotonic() + FOLLOW_EVERY
+        sigs = {a: player.signature(self.h, a) for a in [self.base] + self.alternates}
+        old, self._sigs = self._sigs, sigs
+        if not old or old.get(self.base) != sigs[self.base]:
+            return                          # first look, or ours is the one moving
+        for a in self.alternates:
+            if a in old and old[a] != sigs[a]:
+                self.alternates = [x for x in self.alternates if x != a] + [self.base]
+                self.events.append(f"switched to 0x{a:X}: 0x{self.base:X} stayed frozen")
+                self.base = a
+                self._sigs = {}
+                return
 
     def write(self, kind, name, value):
         if not self.connected:

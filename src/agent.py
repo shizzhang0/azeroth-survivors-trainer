@@ -162,6 +162,8 @@ class Agent:
         if not self.ready:
             return
         vals = self.session.read()
+        while self.session.events:
+            log(self.session.events.pop(0))
         if vals is None:
             return
         pinned = self.session.pinned()

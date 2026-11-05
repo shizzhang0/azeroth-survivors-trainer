@@ -99,6 +99,7 @@ class MailboxFindTest(unittest.TestCase):
 class FakeSession:
     def __init__(self):
         self.connected = True
+        self.events = []
         self.pins = {}
         self.writes = []
         self.values = {(k, n): 0.0 for k, n, *_ in FIELDS}
