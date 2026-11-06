@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import struct
 import sys
+import threading
 from ctypes import wintypes
 
 import numpy as np
@@ -157,13 +158,24 @@ def match_fields(arr, checks):
     return idx
 
 
+SCRATCH_MIN = 1 << 20      # reads this big are sweep chunks: they reuse a buffer
+_scratch = threading.local()   # one per thread: the agent can sweep on two at once
+
+
 def read(h, addr, size):
-    buf = ctypes.create_string_buffer(size)
+    if size >= SCRATCH_MIN:
+        # a fresh 16 MB buffer per chunk is zero-filled for nothing; the bytes
+        # returned are a copy, so reusing the buffer is safe
+        buf = getattr(_scratch, "buf", None)
+        if buf is None or ctypes.sizeof(buf) < size:
+            buf = _scratch.buf = ctypes.create_string_buffer(size)
+    else:
+        buf = ctypes.create_string_buffer(size)
     got = ctypes.c_size_t(0)
     if not k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, size, ctypes.byref(got)):
         return None
     n = got.value
-    return buf.raw[:n] if n else None
+    return ctypes.string_at(buf, n) if n else None      # one copy (buf.raw[:n] made two)
 
 
 def write(h, addr, data):

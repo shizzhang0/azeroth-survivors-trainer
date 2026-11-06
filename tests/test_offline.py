@@ -3,6 +3,7 @@
   python -m unittest discover -s tests -v
 """
 import contextlib
+import ctypes
 import hashlib
 import hmac
 import shutil
@@ -133,6 +134,39 @@ class IterChunksTest(unittest.TestCase):
         with mem.patch():
             sizes = [len(raw) for _a, raw in memscan.iter_chunks(None, overlap=64)]
         self.assertEqual(sizes, [SMALL_CHUNK + 16, 16])
+
+
+class ReadTest(unittest.TestCase):
+    """memscan.read on this very process: real ReadProcessMemory, no game."""
+
+    def setUp(self):
+        self.h = memscan.open_process(os.getpid())
+        self.addCleanup(memscan.k32.CloseHandle, self.h)
+
+    @staticmethod
+    def at(buf):
+        return ctypes.addressof((ctypes.c_char * len(buf)).from_buffer(buf))
+
+    def test_small_read(self):
+        buf = bytearray(b"hello, world")
+        self.assertEqual(memscan.read(self.h, self.at(buf), len(buf)), b"hello, world")
+        self.assertIsNone(memscan.read(self.h, 0, 16))            # unmapped
+
+    def test_chunk_reads_reuse_one_buffer_and_return_copies(self):
+        size = memscan.SCRATCH_MIN + 4096
+        one, two = bytearray(os.urandom(size)), bytearray(os.urandom(size))
+        first = memscan.read(self.h, self.at(one), size)
+        scratch = ctypes.addressof(memscan._scratch.buf)
+        second = memscan.read(self.h, self.at(two), size)
+        self.assertEqual(ctypes.addressof(memscan._scratch.buf), scratch)
+        self.assertEqual((first, second), (bytes(one), bytes(two)))   # the first one intact
+
+    def test_iter_chunks_still_goes_through_read(self):
+        mem = FakeMemory()
+        mem.add(0x10000, 2 * SMALL_CHUNK)
+        with mem.patch(), mock.patch.object(memscan, "read", wraps=mem._read) as read:
+            list(memscan.iter_chunks(None))
+        self.assertEqual(read.call_count, 2)
 
 
 class AliveTest(unittest.TestCase):
