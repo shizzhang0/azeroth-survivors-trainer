@@ -1,26 +1,31 @@
 # Azeroth Survivors Trainer
 
-单机内存修改器，针对 **Azeroth Survivors**（Rust + Bevy 重写的 WoW 1.12 客户端）。
+单机修改器，针对 **Azeroth Survivors**（Rust + Bevy 重写的 WoW 1.12 客户端）。
+有三种用法：[图形界面](#图形界面推荐)、[游戏内控制器](#游戏内控制器)（插件面板）、[命令行](#命令行)；另带一个[存档工具](#存档工具会改存档)。
 
-修改器（`trainer.py` / `player.py` / 界面）纯内存读写：**不改存档、不改 exe、不注入代码**，退出游戏即完全还原。
-唯一的例外是单独的 [`save.py`](#存档工具会改存档)：它改的是存档文件，只在游戏关闭时运行，每次先备份。
+修改器纯内存读写：**不改存档、不改 exe、不注入代码**，退出游戏即完全还原。
+唯一会在游戏里申请内存的地方是天赋列表没有空位时，为荆棘 / 生命偷取借用的一页 4 KB 数据（见[原理](#原理)），里面只有数字，不是代码。
+唯一会改文件的是单独的 [`save.py`](#存档工具会改存档)：它改的是存档文件，只在游戏关闭时运行，每次先备份。
 
 ## 已验证版本
 
-`v0.2.0-1118`（2026-11-04 实测：属性块全部字段、金币/血量/等级/经验/击杀/重抽/宝箱价格均与游戏 HUD 一致，放逐次数与实际放逐次数一致）。
+`v0.2.0-1118`：
+- 2026-11-04 实测：属性块全部字段、金币/血量/等级/经验/击杀/重抽/宝箱价格均与游戏 HUD 一致，放逐次数与实际放逐次数一致。
+- 2026-11-06 实测：目标数、回响、生命数、持续伤害层数、荆棘、生命偷取均与游戏角色面板一致；荆棘和生命偷取在圣骑士（有空位 / 满天赋）和德鲁伊（无天赋 / 1 个天赋）上锁定、解锁、打完整局再开新局都正常。
 
 游戏更新后偏移可能需要重新定位，见 [docs/UPDATING.md](docs/UPDATING.md)。
 
 ## 能做什么
 
-| 层 | 脚本 | 改什么 | 会不会被覆盖 |
+界面和游戏内面板里一共 30 项，名字、顺序、写法都和游戏角色面板一样：
+
+| 层 | 改什么 | 会不会被覆盖 | 命令行 |
 |---|---|---|---|
-| **状态层** | `player.py` | 金币、当前血量、最大血量、等级、经验、击杀、重抽次数、放逐次数、宝箱价格 | 不会，写的是游戏真实状态 |
-| **属性层** | `trainer.py` | 18 项运行时属性，名字和顺序同游戏角色面板：生命值、伤害、急速、暴击、暴击伤害、护甲、范围、目标数、回响、速度、回复、拾取；冒险属性里的生命偷取（不含职业基础）、击杀治疗、荆棘、生命数、经验值、金币、幸运、增益强度、持续伤害层数（最多 4 层）、持续伤害急速 | 会，升级重算会覆盖，需要 `--pin` |
+| **属性层** | 20 项：生命值、伤害、急速、暴击、暴击伤害、护甲、范围、目标数、回响、速度、回复、拾取；冒险属性里的击杀治疗、生命数、经验值、金币、幸运、增益强度、持续伤害层数（最多 4 层）、持续伤害急速 | 会，游戏每 1～3 秒重算，要锁定 | `trainer.py` |
+| **天赋列表层** | 2 项：荆棘、生命偷取（不含职业基础） | 不会，写一次就生效；锁定可防新拿的装备/卡改变总数 | 无，只有界面和游戏内面板 |
+| **状态层** | 8 项：金币、当前血量、等级、经验、击杀、重抽次数、放逐次数、宝箱价格 | 不会，写的是游戏真实状态 | `player.py` |
 
-`--pin` 每次写入前都会重新校验目标：如果那块内存不再像属性块（这局结束了、内存被复用），就停止写入，不会往无关内存里乱写。
-
-![demo](docs/demo.png)
+每次写入前都会重新校验目标：如果那块内存不再像角色（这局结束了、内存被复用），就停止写入，不会往无关内存里乱写。
 
 ## 图形界面（推荐）
 
@@ -53,6 +58,18 @@ uv run --no-project --with numpy python src/gui.py
 4. 角色在内存里换了位置时，后台自动重新找到它，锁定自动接上（面板短暂变黄）。
 5. 游戏关闭后后台继续等，下次开游戏自动连上；关掉 `remote.bat` 窗口才真正退出，所有锁定随之停止。
 
+**一次双击同时开后台和游戏**：在游戏目录（`AzerothSurvivors.exe` 旁边）放一个 `AZS-Launcher.bat`，把 `TRAINER=` 改成你的仓库路径：
+
+```bat
+@echo off
+set "TRAINER=C:\path\to\azeroth-survivors-trainer"
+if not exist "%TRAINER%\remote.bat" (echo Trainer repo not found: %TRAINER% & pause & exit /b 1)
+start "AZS remote" /d "%TRAINER%" cmd /c remote.bat
+start "" /d "%~dp0" "%~dp0AzerothSurvivors.exe"
+```
+
+后台已经在运行时再双击，新窗口会提示 `another agent is already running`，按任意键关掉即可。
+
 **为什么要单独开一个后台程序**：插件的 Lua 是彻底的沙箱（`io/os/require/package/debug/dofile/loadlib` 全是 nil，
 局内也没有 `LaunchURL`），既改不了数值，也启动不了外部程序。所以反过来，由后台程序在内存里找到插件的“信箱”
 （一个以三个魔数开头、等间距存放的数字数组），读插件写进去的命令、执行、再把结果和当前数值写回去，插件只负责显示。
@@ -60,21 +77,24 @@ uv run --no-project --with numpy python src/gui.py
 
 ## 命令行
 
-```bash
-pip install numpy
+需要 [uv](https://docs.astral.sh/uv/)（或者自己 `pip install numpy` 后把 `uv run --no-project --with numpy python` 换成 `python`）：
 
+```bash
 # 看状态
-python src/player.py --show
+uv run --no-project --with numpy python src/player.py --show
 
 # 改钱 / 回血 / 无限重抽 / 宝箱价格
-python src/player.py --gold 999999
-python src/player.py --heal
-python src/player.py --rerolls 99
-python src/player.py --chest 1      # 下一个宝箱只要 1 金币（开完游戏会照常涨价，想再便宜就再改一次）
+uv run --no-project --with numpy python src/player.py --gold 999999
+uv run --no-project --with numpy python src/player.py --heal
+uv run --no-project --with numpy python src/player.py --rerolls 99
+uv run --no-project --with numpy python src/player.py --chest 1   # 下一个宝箱只要 1 金币（开完会照常涨价）
 
 # 改属性（持续生效）
-python src/trainer.py --pin dmg=4.0 --pin luck=5.0
+uv run --no-project --with numpy python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 ```
+
+命令行填的是**内存里的原始值**，不是面板写法：`dmg=4.0` 是伤害倍率 4 倍（面板 +300%），`luck=5.0` 是幸运 +500%。
+荆棘和生命偷取没有命令行，用界面或游戏内面板。
 
 游戏需要先启动并**进入一局**（不在菜单、人还活着）。脚本会自动定位进程和对象。
 
@@ -87,12 +107,12 @@ python src/trainer.py --pin dmg=4.0 --pin luck=5.0
 `save.py` 能解密、修改、重新加密它：
 
 ```bash
-python src/save.py --show                 # 解密并打印存档（只读）
-python src/save.py --resets 0             # 特权重置次数恢复满（存的是“已用次数”）
-python src/save.py --marks 9999.9         # 当前职业的印记（升级装备用）
-python src/save.py --marks 500 --cls 5    # 指定职业，职业编号同 WoW：2 圣骑士、5 牧师……
-python src/save.py --export plain.txt     # 导出明文，手工改完再
-python src/save.py --import plain.txt     # 加密写回
+uv run --no-project --with numpy python src/save.py --show               # 解密并打印存档（只读）
+uv run --no-project --with numpy python src/save.py --resets 0           # 特权重置次数恢复满（存的是“已用次数”）
+uv run --no-project --with numpy python src/save.py --marks 9999.9       # 当前职业的印记（升级装备用）
+uv run --no-project --with numpy python src/save.py --marks 500 --cls 5  # 指定职业，职业编号同 WoW：2 圣骑士、5 牧师……
+uv run --no-project --with numpy python src/save.py --export plain.txt   # 导出明文，手工改完再
+uv run --no-project --with numpy python src/save.py --import plain.txt   # 加密写回
 ```
 
 - **必须先完全退出游戏**：游戏退出时会用内存里的数据重写存档，开着游戏改会被覆盖。工具检测到游戏在运行会拒绝写入。
@@ -104,11 +124,15 @@ python src/save.py --import plain.txt     # 加密写回
 
 ## 原理
 
-**两层结构**，这是本项目最核心的认知：
+**三层结构**，这是本项目最核心的认知：
 
-- 属性层改的是一块 `f32` 缓存（`hp/dmg/cd/crit/cm/spd/pick/xp/arm/?/reg/area/luck/gold` 共 20 个槽位），
-  它会被游戏重算覆盖，所以必须高频重写（`--pin`）。
-- 状态层改的是**玩家对象本体**（几 KB 的大结构），金币、血量、重抽、放逐、宝箱价格都在里面，写入即真实状态。
+- **属性层**改的是一块 `f32` 缓存（伤害、暴击、幸运……加上后面的目标数、生命数、持续伤害层数等），
+  它会被游戏每 1～3 秒重算覆盖，所以锁定时每 0.02 秒写回一次。
+- **天赋列表层**：荆棘和生命偷取不存总数，游戏每次把**天赋效果列表**（军械库里点的通用属性天赋，每种属性一条）
+  里对应的条目加起来，生命偷取再加上吸血饰品和职业基础。工具在列表里**新增一条自己的条目**补上差值，解锁时撤掉，
+  天赋和饰品的数值不动。列表没有空位时（没点通用属性天赋，或正好 4、8 种），把列表复制到工具在游戏里申请的一页内存，
+  容量写成 0：Rust 只释放容量不为 0 的列表，所以游戏永远不会去释放这页；解锁时再指回原来的内存。
+- **状态层**改的是**玩家对象本体**（几 KB 的大结构），金币、血量、重抽、放逐、宝箱价格都在里面，写入即真实状态。
 
 **定位不靠固定地址**，而是：
 
@@ -148,7 +172,7 @@ uv run --no-project --with numpy --with lupa python -m unittest discover -s test
 ## 版本更新后
 
 ```bash
-python src/verify_layout.py      # 先自检：偏移还对得上吗
+uv run --no-project --with numpy python src/verify_layout.py   # 先自检：偏移还对得上吗
 ```
 
 对不上时，`scan_stores.py` + `group_stores.py` 会重新从 exe 里扫出属性写回点。
