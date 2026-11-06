@@ -7,6 +7,8 @@ when lupa is missing:
 
   uv run --no-project --with numpy --with lupa python -m unittest discover -s tests
 """
+import importlib
+import io
 import os
 import re
 import shutil
@@ -23,10 +25,15 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import agent             # noqa: E402
 import addon_mailbox as mb  # noqa: E402
+import game              # noqa: E402
 import memscan           # noqa: E402
 import preset            # noqa: E402
 import session              # noqa: E402
 from session import FIELDS   # noqa: E402
+
+# agent.main() does this before anything prints; these tests drive the agent
+# directly, and its log lines carry Chinese labels.
+game.utf8_console()
 
 LUA_FILE = os.path.join(ROOT, "addon", "AZSRemote", "AZSRemote.lua")
 
@@ -421,6 +428,46 @@ class HandleTest(unittest.TestCase):
             self.assertEqual(agent.handle(s, True, mb.LOCK, level, 30)[0], mb.BAD_INPUT)
         self.assertEqual(agent.handle(s, True, mb.HEAL, 0, 0)[0], mb.OK)
         self.assertEqual(agent.handle(s, False, mb.RELOCATE, 0, 0)[0], mb.OK)
+
+
+class ConsoleTest(unittest.TestCase):
+    """stdout piped on a cp1252 machine: a Chinese log line used to end the agent."""
+
+    @staticmethod
+    def cp1252():
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+
+    def test_log_survives_a_cp1252_stdout(self):
+        out, err = self.cp1252(), self.cp1252()
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err):
+            with self.assertRaises(UnicodeEncodeError):
+                agent.log("panel: lock 幸运 = +500%")      # what the agent died of
+            game.utf8_console()
+            agent.log("panel: lock 幸运 = +500%")
+            sys.stderr.write("没找到游戏进程\n")
+            sys.stderr.flush()
+        self.assertIn("幸运 = +500%".encode("utf-8"), out.buffer.getvalue())
+        self.assertIn("没找到游戏进程".encode("utf-8"), err.buffer.getvalue())
+
+    def test_no_stream_at_all_is_fine(self):
+        with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+            game.utf8_console()                           # pythonw: nothing to switch
+
+    def test_every_tool_switches_before_anything_else(self):
+        class First(Exception):
+            pass
+        names = ["agent", "player", "trainer", "save", "verify_layout"]
+        try:
+            import tkinter  # noqa: F401
+            names.append("gui")
+        except ImportError:        # pragma: no cover
+            pass
+        for name in names:
+            module = importlib.import_module(name)
+            with mock.patch.object(game, "utf8_console", side_effect=First), \
+                    mock.patch.object(sys, "argv", [name + ".py"]):
+                with self.assertRaises(First, msg=name):
+                    module.main()
 
 
 class InstallAddonTest(unittest.TestCase):

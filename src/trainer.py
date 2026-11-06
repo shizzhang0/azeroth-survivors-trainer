@@ -141,6 +141,7 @@ def pin(h, copies, pins, interval, skip):
 
 
 def main():
+    game.utf8_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--pid", type=int)
     ap.add_argument("--show", action="store_true")

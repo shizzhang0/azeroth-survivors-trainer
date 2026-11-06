@@ -1,6 +1,7 @@
 """Game-specific glue shared by every tool: find the process, read the HUD feed."""
 import ctypes
 import re
+import sys
 import time
 from ctypes import wintypes
 
@@ -12,6 +13,17 @@ EXE_NAME = "AzerothSurvivors"
 HUD_MARK = b'{"type":"hud"'
 HUD_SPAN = 700          # one HUD frame fits in this many bytes
 _NUM = re.compile(r'"(\w+)":(-?[0-9.]+)')
+
+
+def utf8_console():
+    """Every tool calls this first. Labels and errors are Chinese, and stdout
+    piped or redirected on Windows uses the ANSI code page (cp1252, cp437),
+    which can't encode them: one print would raise and end the tool."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass            # None under pythonw, or not a stream we can switch
 
 
 def find_pid():

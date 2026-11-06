@@ -151,6 +151,7 @@ def verify_player(h):
 
 
 def main():
+    game.utf8_console()
     pid = int(sys.argv[1]) if len(sys.argv) > 1 else game.find_pid()
     if not pid:
         sys.exit("game window not found")

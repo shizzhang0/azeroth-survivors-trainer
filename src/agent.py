@@ -339,6 +339,7 @@ def single_instance():
 
 
 def main():
+    game.utf8_console()
     ap = argparse.ArgumentParser(description="AZS in-game controller agent")
     ap.add_argument("--preset", default=preset.DEFAULT_PATH, metavar="FILE",
                     help=f"values to lock at the start of every run (default: {preset.DEFAULT_PATH})")

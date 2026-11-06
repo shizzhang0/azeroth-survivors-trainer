@@ -454,6 +454,7 @@ class SavePanel:
 
 
 def main():
+    game.utf8_console()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)     # crisp text on scaled displays
     except (AttributeError, OSError):
