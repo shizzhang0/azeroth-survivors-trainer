@@ -9,7 +9,7 @@ A plain UTF-8 text file, by default AZS-preset.txt next to the game's exe:
 
 Names are the panel's labels (or the internal names: dmg, luck, player.gold).
 Every field that can be locked is locked, so the game can't take it back; the
-rest (等级, 当前经验, 击杀) is written once. The file is read again at every
+rest (金币数量, 等级, 当前经验, 击杀, 重抽次数, 放逐次数) is written once. The file is read again at every
 run, so an edit takes effect from the next run without restarting the agent.
 """
 import os
@@ -100,7 +100,7 @@ def template():
         "# AZS 每局自动设置的数值。后台（remote.bat）每局定位到角色后按这里锁定。",
         "# 用法：删掉行首的 #，在 = 后面填数，保存；下一局开始生效，不用重启后台。= 后面空着的行不管。",
         "# 写法和游戏面板、AZS 面板一样：伤害 100 就是 +100%，急速 30 就是 +30%，暴击 50 就是 50%。",
-        "# 能锁定的都会锁定（游戏改不回去）；等级、当前经验、击杀只在开局写一次。",
+        "# 能锁定的都会锁定（游戏改不回去）；金币数量、等级、当前经验、击杀、重抽次数、放逐次数只在开局写一次。",
         "# 想临时取消，在 AZS 面板里去掉那一项的“锁”就行。",
         "",
     ]

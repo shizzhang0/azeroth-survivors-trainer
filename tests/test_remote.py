@@ -344,6 +344,16 @@ class PresetTest(unittest.TestCase):
         self.assertIn(("player", "level", 30.0), s.writes)
         self.assertEqual(len(lines), 3)
 
+    def test_counters_and_gold_are_written_once_not_locked(self):
+        # a locked banish count let a run banish its card pool empty (v1118)
+        s = FakeSession()
+        preset.apply(s, preset.parse_text("金币数量 = 99999\n重抽次数 = 100\n放逐次数 = 100"))
+        self.assertEqual(s.pins, {})
+        self.assertIn(("player", "banishes", 100.0), s.writes)
+        for name in ("gold", "rerolls", "banishes"):
+            with self.assertRaises(ValueError):
+                session.Session().pin("player", name, 1)
+
     def test_one_failure_does_not_stop_the_rest(self):
         s = FakeSession()
         real_pin = s.pin

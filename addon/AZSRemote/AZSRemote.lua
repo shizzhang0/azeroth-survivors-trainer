@@ -40,13 +40,13 @@ local FIELDS = {
 	{ "stat", "bp", "增益强度", "f", true, "+%", "冒险属性" },
 	{ "stat", "dots", "持续伤害层数", "i", true, "dots", "冒险属性" },
 	{ "stat", "doth", "持续伤害急速", "f", true, "+%", "冒险属性" },
-	{ "player", "gold", "金币数量", "i", true, "int", "状态" },
+	{ "player", "gold", "金币数量", "i", false, "int", "状态" },
 	{ "player", "hp", "当前血量", "f", true, "num", "状态" },
 	{ "player", "level", "等级", "i", false, "int", "状态" },
 	{ "player", "xp", "当前经验", "i", false, "int", "状态" },
 	{ "player", "kills", "击杀", "i", false, "int", "状态" },
-	{ "player", "rerolls", "重抽次数", "i", true, "int", "状态" },
-	{ "player", "banishes", "放逐次数", "i", true, "int", "状态" },
+	{ "player", "rerolls", "重抽次数", "i", false, "int", "状态" },
+	{ "player", "banishes", "放逐次数", "i", false, "int", "状态" },
 	{ "player", "chest", "宝箱价格", "i", true, "int", "状态" },
 };
 

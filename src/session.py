@@ -57,13 +57,13 @@ FIELDS = [
     ("stat", "bp", "增益强度", "<f", True, "+%", "冒险属性"),
     ("stat", "dots", "持续伤害层数", "<i", True, "dots", "冒险属性"),
     ("stat", "doth", "持续伤害急速", "<f", True, "+%", "冒险属性"),
-    ("player", "gold", "金币数量", "<i", True, "int", "状态"),
+    ("player", "gold", "金币数量", "<i", False, "int", "状态"),
     ("player", "hp", "当前血量", "<f", True, "num", "状态"),
     ("player", "level", "等级", "<i", False, "int", "状态"),    # locking these loops level-ups
     ("player", "xp", "当前经验", "<i", False, "int", "状态"),
     ("player", "kills", "击杀", "<i", False, "int", "状态"),
-    ("player", "rerolls", "重抽次数", "<i", True, "int", "状态"),
-    ("player", "banishes", "放逐次数", "<i", True, "int", "状态"),
+    ("player", "rerolls", "重抽次数", "<i", False, "int", "状态"),
+    ("player", "banishes", "放逐次数", "<i", False, "int", "状态"),
     ("player", "chest", "宝箱价格", "<i", True, "int", "状态"),
 ]
 STAT_ALL = {**STAT, **STAT_TAIL}
