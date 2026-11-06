@@ -8,16 +8,20 @@ Click 定位游戏 inside a run, wait for the sweep (30-90 s), then:
   * 状态 (run state): type a value, click 写入 (or press Enter). Tick 锁定 to
     keep it there (e.g. chest price 1, rerolls 99).
   * 存档 (save file, via save.py): perk resets and marks. Only writable while
-    the game is closed — the game rewrites the save when it exits.
+    the game is closed — the game rewrites the save when it exits. The key is
+    in the game exe: if AZS_EXE isn't set, it asks for the exe once and
+    remembers it (scan_stores.remember_exe).
 """
 import ctypes
+import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 import game
 import save
+import scan_stores
 from offsets import GAME_VERSION
 from session import FIELDS, SPEC, UNIT, Session, SessionError, parse, show
 
@@ -306,11 +310,15 @@ class SavePanel:
         self.game_running = None
         self.ticks = 0
         self.classes = []               # class ids in the combobox, same order
+        self.exe = None                 # exe picked in this window (None: scan_stores.game_exe())
+        self.asked_exe = False          # the picker pops up by itself only once
 
         f = self.frame = ttk.LabelFrame(
             root, text="存档（局外进度 · 只有游戏完全退出后才能改，每次自动备份）", padding=8)
         self.info = tk.StringVar(value="读取中…")
-        ttk.Label(f, textvariable=self.info).grid(row=0, column=0, columnspan=5, sticky="w")
+        ttk.Label(f, textvariable=self.info).grid(row=0, column=0, columnspan=4, sticky="w")
+        self.exe_btn = ttk.Button(f, text="指定游戏 exe…", command=self.pick_exe)
+        self.exe_btn.grid(row=0, column=4, sticky="e", padx=(0, 4))
         self.reload_btn = ttk.Button(f, text="重新读取", command=self.load)
         self.reload_btn.grid(row=0, column=5, sticky="e")
 
@@ -337,17 +345,30 @@ class SavePanel:
         self.load()
 
     # --- read -------------------------------------------------------------
-    def load(self):
+    def load(self, exe=None):
+        """Read the save in the background. `exe`: one just picked, tried first and
+        kept (and remembered for next time) only if its key opens the save."""
         if self.loading:
             return
         self.loading = True
         self.info.set("读取存档中…")
         self.update_state()
+        exe = exe or self.exe
 
         def work():
             try:
-                self.results.put(("ok", save.Save()))
+                sv = save.Save(exe=exe)
+                if exe and exe != self.exe:
+                    try:
+                        scan_stores.remember_exe(exe)
+                    except OSError:
+                        pass            # still used for this window
+                self.results.put(("ok", (sv, exe)))
+            except save.NoExe as e:
+                self.results.put(("noexe", str(e)))
             except save.SaveError as e:
+                if exe and exe != self.exe:     # just picked: say which file didn't work
+                    e = f"用 {exe} 打不开（选的是游戏的 AzerothSurvivors.exe 吗？）：{e}"
                 self.results.put(("err", str(e)))
             except Exception as e:      # noqa: BLE001
                 self.results.put(("err", f"{type(e).__name__}: {e}"))
@@ -360,13 +381,30 @@ class SavePanel:
         except queue.Empty:
             return
         self.loading = False
-        if kind == "err":
-            self.sv = None
-            self.info.set(f"读不了存档：{val}")
-        else:
-            self.sv = val
+        if kind == "ok":
+            self.sv, exe = val
+            if exe:
+                self.exe = exe
             self.info.set(f"存档：{self.sv.path}")
+        else:
+            self.sv = None
+            if kind == "noexe":
+                self.info.set("读存档要用游戏 exe 里的密钥：点“指定游戏 exe…”选一次 AzerothSurvivors.exe，以后会记住")
+            else:
+                self.info.set(f"读不了存档：{val}")
         self.show()
+        if kind == "noexe" and not self.asked_exe:
+            self.asked_exe = True
+            self.root.after(100, self.pick_exe)
+
+    def pick_exe(self):
+        if self.loading:
+            return
+        path = filedialog.askopenfilename(
+            parent=self.root, title="选择游戏的 AzerothSurvivors.exe（读存档的密钥在里面）",
+            filetypes=[("AzerothSurvivors.exe", "AzerothSurvivors.exe"), ("程序", "*.exe")])
+        if path:
+            self.load(exe=os.path.normpath(path))
 
     def show(self):
         if not self.sv:

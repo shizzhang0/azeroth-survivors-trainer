@@ -24,6 +24,7 @@ import memscan         # noqa: E402
 import offsets         # noqa: E402
 import player          # noqa: E402
 import save            # noqa: E402
+import scan_stores     # noqa: E402
 import session         # noqa: E402
 import trainer         # noqa: E402
 import verify_layout   # noqa: E402
@@ -852,11 +853,45 @@ class SaveEditTest(unittest.TestCase):
         original = save.encode(KEY, NONCE, PLAIN)
         with open(path, "w", newline="") as f:
             f.write(original)
-        with mock.patch.object(sys, "argv", ["save.py", "--file", path, "--resets", "0"]),                 mock.patch.object(save, "find_key", return_value=KEY),                 mock.patch.object(game, "find_pid", return_value=1234),                 contextlib.redirect_stdout(io.StringIO()):
+        with mock.patch.object(sys, "argv", ["save.py", "--file", path, "--exe", "unused", "--resets", "0"]),                 mock.patch.object(save, "find_key", return_value=KEY),                 mock.patch.object(game, "find_pid", return_value=1234),                 contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(SystemExit):
                 save.main()
         self.assertEqual(save.read_text(path), original)
         self.assertFalse(os.path.exists(os.path.join(folder, save.BACKUP_DIR)))
+
+
+class ExeLookupTest(unittest.TestCase):
+    """No install path in the repo: AZS_EXE, else the exe picked once in the GUI."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.remembered = os.path.join(self.dir, "trainer", "game-exe.txt")
+        self.exe = os.path.join(self.dir, "AzerothSurvivors.exe")
+        open(self.exe, "wb").close()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("AZS_EXE", None)
+
+    def test_nothing_known_is_an_error(self):
+        with self.assertRaises(scan_stores.ExeNotSet):
+            scan_stores.game_exe(self.remembered)
+        with mock.patch.object(scan_stores, "REMEMBERED", self.remembered):
+            with self.assertRaises(save.NoExe):
+                save.Save(os.path.join(self.dir, "missing.txt"))
+
+    def test_remembered_exe_is_used_until_it_disappears(self):
+        scan_stores.remember_exe(self.exe, self.remembered)         # creates the folder
+        self.assertEqual(scan_stores.game_exe(self.remembered), self.exe)
+        os.remove(self.exe)                                         # game moved / uninstalled
+        with self.assertRaises(scan_stores.ExeNotSet):
+            scan_stores.game_exe(self.remembered)
+
+    def test_environment_wins(self):
+        scan_stores.remember_exe(self.exe, self.remembered)
+        os.environ["AZS_EXE"] = r"D:\elsewhere\AzerothSurvivors.exe"
+        self.assertEqual(scan_stores.game_exe(self.remembered), r"D:\elsewhere\AzerothSurvivors.exe")
 
 
 if __name__ == "__main__":

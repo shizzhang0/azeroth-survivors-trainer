@@ -33,7 +33,7 @@ import numpy as np
 
 import game
 from group_stores import pe_sections
-from scan_stores import DEFAULT_EXE
+from scan_stores import ExeNotSet, game_exe
 
 SAVE = os.path.join(os.environ.get("APPDATA", ""), "wenilla-rogue", "characters.txt")
 BACKUP_DIR = "trainer-backups"          # next to the save
@@ -44,6 +44,10 @@ MARKS_SCALE = 10                        # stored in tenths: 1440 = 144.0 marks
 
 class SaveError(Exception):
     pass
+
+
+class NoExe(SaveError):
+    """No game exe given and none known (AZS_EXE / remembered): the GUI asks."""
 
 
 # --- codec ------------------------------------------------------------------
@@ -267,8 +271,14 @@ def all_marks(lines):
 class Save:
     """One read of the save, decrypted. commit() writes an edited copy back."""
 
-    def __init__(self, path=SAVE, exe=DEFAULT_EXE):
+    def __init__(self, path=SAVE, exe=None):
         self.path = path
+        if exe is None:
+            try:
+                exe = game_exe()
+            except ExeNotSet:
+                raise NoExe("不知道游戏 exe 在哪（密钥在 exe 里）：命令行传 --exe、设环境变量 AZS_EXE，"
+                            "或者在图形界面的存档栏里指定一次 (game exe unknown)") from None
         try:
             self.text = read_text(path)
         except OSError as e:
@@ -294,7 +304,8 @@ class Save:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--file", default=SAVE, help="save file (default: %(default)s)")
-    ap.add_argument("--exe", default=DEFAULT_EXE, help="game exe, where the key is")
+    ap.add_argument("--exe", help="game exe, where the key is (default: AZS_EXE, "
+                    "else the one picked in the GUI)")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--resets", type=int, metavar="USED",
                     help="perk resets used on this save (0 = all left)")

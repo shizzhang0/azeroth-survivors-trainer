@@ -34,7 +34,7 @@ python src/scan_stores.py    # 扫 exe 里所有 movss [rsi+0x100..0x10000], xmm
 python src/group_stores.py   # 按 .pdata 函数边界分组，输出“包含最多属性写回”的函数
 ```
 
-exe 默认路径是 `C:\Program Files (x86)\AzerothSurvivors\AzerothSurvivors.exe`，装在别处时传参数或设环境变量 `AZS_EXE`。
+exe 路径作为第一个参数传入；不传时用环境变量 `AZS_EXE`，再没有就用在图形界面存档栏里选过的那个。仓库里不写默认安装路径。
 
 输出形如：
 

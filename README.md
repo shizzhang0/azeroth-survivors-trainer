@@ -44,13 +44,18 @@ uv run --no-project --with numpy python src/gui.py
    这时会自动重新定位、锁定保留；真连不上了（游戏关了、对局结束）才需要再点一次定位。
 5. **下面“存档”**（就是 [`save.py`](#存档工具会改存档)）：特权重置清零、改各职业的印记。
    游戏开着时这里只读、按钮是灰的；**完全退出游戏**后自动变成可改，每次写入都会先备份。
+   这一栏要知道游戏 exe 在哪（密钥在 exe 里）：第一次会弹窗让你选一次 `AzerothSurvivors.exe`，能打开存档才记住
+   （记在 `%APPDATA%\azeroth-survivors-trainer\game-exe.txt`，不在仓库里），以后不再问；游戏换了位置点“指定游戏 exe…”重选。
+   设了环境变量 `AZS_EXE` 时以它为准。
 
 ## 游戏内控制器
 
 不想切出游戏的话，用游戏内面板：
 
-1. 双击仓库根目录的 **`remote.bat`**（游戏开没开都行）。它会把插件 `AZSRemote` 装进
-   `benilla-config\AddOns`（第一次装或有更新时），然后在后台等游戏。
+1. 双击游戏目录里的 **`AZS-Launcher.bat`**（第一次要先放一个，见下面）：它把插件 `AZSRemote` 同步进游戏的
+   `benilla-config\AddOns`，再开后台（仓库里的 `remote.bat`）和游戏。
+   后台也可以单独双击 `remote.bat` 开（游戏开没开都行），但插件只由启动器装和更新：
+   不用启动器的话，手动把仓库里的 `addon\AZSRemote` 整个文件夹复制到游戏的 `benilla-config\AddOns\` 下。
 2. **开一局新冒险**（插件在开局时加载），点屏幕左侧的 **AZS** 按钮（或输入 `/azs`）打开面板。
    按钮可以拖到任意位置，位置会被游戏记住；颜色就是后台状态：红 = 后台没开，黄 = 定位中，绿 = 已就绪。
 3. 状态显示“定位中…”约 30～60 秒，变绿色“已就绪”后：属性按游戏的写法填数（如伤害 `100` = +100%）按回车或勾“锁”；状态字段点“写”，能锁的也可以勾“锁”。
@@ -58,19 +63,23 @@ uv run --no-project --with numpy python src/gui.py
 4. 角色在内存里换了位置时，后台自动重新找到它，锁定自动接上（面板短暂变黄）。
 5. 游戏关闭后后台继续等，下次开游戏自动连上；关掉 `remote.bat` 窗口才真正退出，所有锁定随之停止。
 
-**一次双击同时开后台和游戏**：在游戏目录（`AzerothSurvivors.exe` 旁边）放一个 `AZS-Launcher.bat`，把 `TRAINER=` 改成你的仓库路径：
+**`AZS-Launcher.bat`（一次双击：同步插件、开后台、开游戏）**：在游戏目录（`AzerothSurvivors.exe` 旁边）放这个文件，把 `TRAINER=` 改成你的仓库路径。
+仓库里不写任何安装路径：插件装到哪、预设文件在哪，都由它按自己所在的目录给出。
+每次启动都会同步一次插件，`git pull` 之后插件自动跟着更新（插件在开局时加载，开着游戏时更新的下一局生效）。
 
 ```bat
 @echo off
 set "TRAINER=C:\path\to\azeroth-survivors-trainer"
 if not exist "%TRAINER%\remote.bat" (echo Trainer repo not found: %TRAINER% & pause & exit /b 1)
-start "AZS remote" /d "%TRAINER%" cmd /c remote.bat
+robocopy "%TRAINER%\addon\AZSRemote" "%~dp0benilla-config\AddOns\AZSRemote" /NJH /NJS /NFL /NDL >nul
+if errorlevel 8 (echo Could not copy the addon into the game folder & pause)
+start "AZS remote" /d "%TRAINER%" cmd /c remote.bat --preset "%~dp0AZS-preset.txt"
 start "" /d "%~dp0" "%~dp0AzerothSurvivors.exe"
 ```
 
 后台已经在运行时再双击，新窗口会提示 `another agent is already running`，按任意键关掉即可。
 
-**每局自动锁定常用数值（预设）**：后台第一次启动时会在游戏目录写一个 `AZS-preset.txt`，列出全部属性，默认都注释掉。
+**每局自动锁定常用数值（预设）**：第一次用启动器开后台时，会在游戏目录（`AZS-Launcher.bat` 旁边）写一个 `AZS-preset.txt`，列出全部属性，默认都注释掉。
 删掉行首的 `#`、在 `=` 后面按面板写法填数（如 `伤害 = 100`、`幸运 = 1000`、`宝箱价格 = 1`），保存即可：
 
 - 每局定位到角色后自动生效：能锁的都锁上（面板上对应的“锁”会勾上），金币数量、等级、当前经验、击杀、重抽、放逐只在开局写一次；
@@ -78,7 +87,7 @@ start "" /d "%~dp0" "%~dp0AzerothSurvivors.exe"
 - 写错的行会在后台窗口里报出行号，那一局整个文件都不生效；
 - 局中想临时取消，在面板里去掉那一项的“锁”。
 
-想用别的文件：`remote.bat --preset 路径`；不想用：`remote.bat --no-preset`。
+想用别的文件：改 `AZS-Launcher.bat` 里 `--preset` 后面的路径（文件不存在时会写一个模板）；不想用：删掉 `--preset ...`。
 
 **为什么要单独开一个后台程序**：插件的 Lua 是彻底的沙箱（`io/os/require/package/debug/dofile/loadlib` 全是 nil，
 局内也没有 `LaunchURL`），既改不了数值，也启动不了外部程序。所以反过来，由后台程序在内存里找到插件的“信箱”
@@ -128,7 +137,7 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 - **必须先完全退出游戏**：游戏退出时会用内存里的数据重写存档，开着游戏改会被覆盖。工具检测到游戏在运行会拒绝写入。
 - 每次写入前自动备份到存档旁边的 `trainer-backups\`，写完立即解密回读，只允许预期的那几行发生变化，否则自动还原备份。
 - 加 `--dry-run` 只显示改动、不写入。
-- 密钥不在本仓库里：每次运行时从游戏 exe 里找，并且要能验证当前存档才会使用。游戏换了存档格式时工具会报错退出，不会写出坏存档。
+- 密钥不在本仓库里：每次运行时从游戏 exe 里找（exe 位置用 `--exe` 传；不传时用环境变量 `AZS_EXE`，再没有就用在图形界面里选过的那个），并且要能验证当前存档才会使用。游戏换了存档格式时工具会报错退出，不会写出坏存档。
 
 存档格式和各字段含义见 [docs/SAVE.md](docs/SAVE.md)。
 
@@ -166,7 +175,7 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 | `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
 | `src/diffscan.py` | 差分扫描，找未知字段 |
 | `src/save.py` | 存档解密 / 修改 / 加密（**会改存档**，只在游戏关闭时运行） |
-| `addon/AZSRemote/` | 游戏内控制器插件（Lua，`/azs`），由 `agent.py` 自动安装 |
+| `addon/AZSRemote/` | 游戏内控制器插件（Lua，`/azs`），由 `AZS-Launcher.bat` 每次启动时同步进游戏 |
 | `src/agent.py` / `src/addon_mailbox.py` / `remote.bat` | 控制器后台 / 和插件通信的内存信箱协议 / 双击启动 |
 | `src/preset.py` | 预设文件 `AZS-preset.txt`：解析、每局自动锁定、生成模板 |
 | `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |

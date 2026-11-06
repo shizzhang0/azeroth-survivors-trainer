@@ -6,7 +6,8 @@ Pattern: F3 0F 11 <modrm> <disp32>
   F3 0F 11   movss m32, xmm
   modrm      mod=10, rm=110 -> [rsi + disp32] (reg = xmm0..7)
   disp32     0x100..0x10000, 4-byte aligned
-The exe path defaults to DEFAULT_EXE (override with AZS_EXE or argv[1]).
+The exe is argv[1], else game_exe(): the AZS_EXE environment variable, else the
+exe the GUI was pointed at once. The repo holds no install path.
 Pure stdlib: no numpy needed.
 """
 import collections
@@ -17,12 +18,50 @@ import sys
 
 MOVSS_RSI = re.compile(rb"(?=\xF3\x0F\x11[\x86\x8E\x96\x9E\xA6\xAE\xB6\xBE](.{4}))", re.S)
 DISP_MIN, DISP_MAX = 0x100, 0x10000
-DEFAULT_EXE = os.environ.get(
-    "AZS_EXE", r"C:\Program Files (x86)\AzerothSurvivors\AzerothSurvivors.exe")
+
+
+# The exe the user picked in the GUI, kept per user, outside the repo.
+REMEMBERED = os.path.join(os.environ.get("APPDATA", ""), "azeroth-survivors-trainer", "game-exe.txt")
+
+
+class ExeNotSet(RuntimeError):
+    pass
+
+
+def game_exe(remembered=None):
+    """The game exe: AZS_EXE, else the one remember_exe() stored (if it still
+    exists). The install path is the user's, not the repo's, so with neither
+    this is an error rather than a guess."""
+    path = os.environ.get("AZS_EXE")
+    if path:
+        return path
+    try:
+        with open(remembered or REMEMBERED, encoding="utf-8") as f:
+            path = f.read().strip()
+    except OSError:
+        path = ""
+    if path and os.path.isfile(path):
+        return path
+    raise ExeNotSet("game exe unknown: pass the game's AzerothSurvivors.exe, set AZS_EXE "
+                    "to it, or pick it once in the GUI's save panel")
+
+
+def remember_exe(path, remembered=None):
+    """Store `path` for game_exe() to find next time."""
+    remembered = remembered or REMEMBERED
+    os.makedirs(os.path.dirname(remembered), exist_ok=True)
+    with open(remembered, "w", encoding="utf-8") as f:
+        f.write(path + "\n")
 
 
 def default_exe():
-    return sys.argv[1] if len(sys.argv) > 1 else DEFAULT_EXE
+    """For the command-line scans: argv[1], else game_exe()."""
+    if len(sys.argv) > 1:
+        return sys.argv[1]
+    try:
+        return game_exe()
+    except ExeNotSet as e:
+        sys.exit(str(e))
 
 
 def movss_stores(d):

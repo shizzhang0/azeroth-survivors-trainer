@@ -1,6 +1,7 @@
 """Values the agent applies by itself at the start of every run.
 
-A plain UTF-8 text file, by default AZS-preset.txt next to the game's exe:
+A plain UTF-8 text file passed with --preset (AZS-Launcher.bat passes
+AZS-preset.txt next to itself, in the game folder):
 
     # comment
     伤害 = 100          (+100%, typed the way the pane shows it)
@@ -14,11 +15,9 @@ run, so an edit takes effect from the next run without restarting the agent.
 """
 import os
 
-from scan_stores import DEFAULT_EXE
 from session import FIELDS, SessionError, coerce, parse, show
 
 FILENAME = "AZS-preset.txt"
-DEFAULT_PATH = os.path.join(os.path.dirname(DEFAULT_EXE), FILENAME)
 
 # (kind, name) for each name a line may use: the label, kind.name, and the bare
 # name where it is unambiguous (gold is both a stat and a player field).
@@ -66,7 +65,7 @@ def parse_text(text):
     return out
 
 
-def load(path=DEFAULT_PATH):
+def load(path):
     """The file's entries, [] if there is no file."""
     try:
         with open(path, encoding="utf-8-sig") as f:
@@ -119,7 +118,7 @@ def template():
     return "\n".join(rows) + "\n"
 
 
-def ensure_file(path=DEFAULT_PATH):
+def ensure_file(path):
     """Write the commented-out template if there is no file yet. True if written."""
     if os.path.exists(path):
         return False

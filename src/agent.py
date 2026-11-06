@@ -2,21 +2,19 @@
 
   python agent.py                 (or double-click remote.bat in the repo root)
 
-Start it by hand, before or after the game. It keeps the addon installed,
-waits for the game, finds the addon's mailbox in memory, locates the hero, then
-carries out what you click in the in-game panel (AZS button or /azs) and
-reports values back. When the game moves the hero mid-run it finds it again by
-itself and keeps the locks. When the game closes it waits for the next launch;
-closing this window is what stops it (and every lock).
+Start it by hand, before or after the game. It waits for the game, finds the
+addon's mailbox in memory, locates the hero, then carries out what you click in
+the in-game panel (AZS button or /azs) and reports values back. When the game
+moves the hero mid-run it finds it again by itself and keeps the locks. When
+the game closes it waits for the next launch; closing this window is what
+stops it (and every lock).
 
-At the start of every run it also applies AZS-preset.txt (next to the game's
-exe; --preset to use another file): see preset.py.
+It needs no install path: the addon is copied into the game by
+AZS-Launcher.bat (see README). With --preset FILE it also applies that file at
+the start of every run: see preset.py.
 """
 import argparse
 import ctypes
-import filecmp
-import os
-import shutil
 import sys
 import threading
 import time
@@ -25,7 +23,6 @@ import game
 import addon_mailbox as mb
 import memscan
 import preset
-from scan_stores import DEFAULT_EXE
 from session import FIELDS, Session, SessionError, show
 
 TICK = 0.05              # mailbox poll
@@ -33,28 +30,10 @@ SNAPSHOT_EVERY = 0.25    # values written back to the panel
 HEARTBEAT_EVERY = 0.5
 WAIT_GAME = 2.0
 RELOCATE_RETRY = 5.0  # after a failed relocate
-ADDON = "AZSRemote"
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ADDON_SRC = os.path.join(REPO, "addon", ADDON)
-ADDON_DST = os.path.join(os.path.dirname(DEFAULT_EXE), "benilla-config", "AddOns", ADDON)
 
 
 def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
-
-
-def install_addon(src=ADDON_SRC, dst=ADDON_DST):
-    """Copy the addon into the game's AddOns folder if missing or out of date.
-    Returns True when files were copied (the game picks them up next run)."""
-    names = sorted(os.listdir(src))
-    if os.path.isdir(dst) and all(
-            os.path.exists(os.path.join(dst, n)) and
-            filecmp.cmp(os.path.join(src, n), os.path.join(dst, n), shallow=False) for n in names):
-        return False
-    os.makedirs(dst, exist_ok=True)
-    for n in names:
-        shutil.copy2(os.path.join(src, n), os.path.join(dst, n))
-    return True
 
 
 def handle(session, ready, cmd, arg1, arg2):
@@ -340,17 +319,16 @@ def single_instance():
 
 def main():
     ap = argparse.ArgumentParser(description="AZS in-game controller agent")
-    ap.add_argument("--preset", default=preset.DEFAULT_PATH, metavar="FILE",
-                    help=f"values to lock at the start of every run (default: {preset.DEFAULT_PATH})")
+    ap.add_argument("--preset", metavar="FILE",
+                    help="values to lock at the start of every run; an empty template is "
+                         "written if FILE doesn't exist")
     ap.add_argument("--no-preset", action="store_true", help="don't apply any preset")
     args = ap.parse_args()
     if not single_instance():
         sys.exit("another agent is already running")
-    if install_addon():
-        log(f"installed/updated the addon in {ADDON_DST} — it loads from the next run")
     path = None if args.no_preset else args.preset
     if path:
-        if path == preset.DEFAULT_PATH and preset.ensure_file(path):
+        if preset.ensure_file(path):
             log(f"wrote an empty preset to {path} — edit it to lock values every run")
         try:
             n = len(preset.load(path))
