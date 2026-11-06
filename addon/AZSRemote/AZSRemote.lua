@@ -30,7 +30,7 @@ local FIELDS = {
 	{ "stat", "spd", "速度", "f", true, "+%1", "角色" },
 	{ "stat", "reg", "回复", "f", true, "num", "角色" },
 	{ "stat", "pick", "拾取（码）", "f", true, "num", "角色" },
-	{ "effect", "lifesteal", "生命偷取（装备部分）", "f", true, "%.1", "冒险属性" },
+	{ "effect", "lifesteal", "生命偷取（不含基础）", "f", true, "%.1", "冒险属性" },
 	{ "stat", "heal", "击杀治疗", "f", true, "num", "冒险属性" },
 	{ "effect", "thorns", "荆棘", "f", true, "%", "冒险属性" },
 	{ "stat", "lives", "生命数", "i", true, "int", "冒险属性" },

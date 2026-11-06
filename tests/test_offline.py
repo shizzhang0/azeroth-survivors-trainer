@@ -489,14 +489,82 @@ class SessionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.s.write("stat", "targets", 1.5)
 
-    def _effect_list(self, entries):
-        """Point the hero's effect Vec at `entries` [(tag, value)] (8 bytes each)."""
+    def _effect_list(self, entries, cap=None):
+        """Point the hero's effect Vec at `entries` [(tag, value)] (8 bytes each).
+        cap defaults to the length: a full list, no spare slot."""
         heap = self.mem.add(0x90000, 0x1000)
         buf = b"".join(struct.pack("<B3xf", t, v) for t, v in entries)
         self.mem.put(heap, buf)
         self.mem.put(self.obj + offsets.EFFECT_LIST[0], struct.pack("<Q", heap))
         self.mem.put(self.obj + offsets.EFFECT_LIST[1], struct.pack("<Q", len(entries)))
+        self.mem.put(self.obj + offsets.EFFECT_CAP,
+                     struct.pack("<Q", len(entries) if cap is None else cap))
         return heap
+
+    def _list_len(self):
+        return struct.unpack("<Q", self.mem._read(None, self.obj + offsets.EFFECT_LIST[1], 8))[0]
+
+    def _entry(self, heap, i):
+        return struct.unpack("<B3xf", self.mem._read(None, heap + 8 * i, 8))
+
+    def test_own_entry_goes_into_a_spare_slot(self):
+        # v1118: 7 talents, capacity 8 -> appended (0x16, 0.5) showed 荆棘 50%
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)], cap=4)
+        self.s.pin("effect", "thorns", 0.77)
+        self.assertEqual(self._list_len(), 3)
+        tag, value = self._entry(heap, 2)
+        self.assertEqual(tag, 0x16)
+        self.assertAlmostEqual(value, 0.47, places=5)           # just the difference
+        self.assertAlmostEqual(self._entry(heap, 1)[1], 0.3, places=5)   # talent untouched
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        self.s.pin("effect", "thorns", 0.9)                       # re-lock: same slot
+        self.s.tick()
+        self.assertEqual(self._list_len(), 3)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
+        self.s.pin("effect", "thorns", None)                      # unlock: counted out
+        self.assertEqual(self._list_len(), 2)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
+
+    def test_thorns_without_any_source_when_there_is_a_slot(self):
+        self._effect_list([(0x05, 0.1)], cap=4)
+        self.s.write("effect", "thorns", 0.5)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.5, places=5)
+
+    def test_unlock_leaves_entries_after_ours_alone(self):
+        heap = self._effect_list([(0x05, 0.1)], cap=4)
+        self.s.pin("effect", "thorns", 0.5)
+        self.mem.put(heap + 16, struct.pack("<B3xf", 0x07, 0.2))  # game appends after us
+        self.mem.put(self.obj + offsets.EFFECT_LIST[1], struct.pack("<Q", 3))
+        self.s.pin("effect", "thorns", None)
+        self.assertEqual(self._list_len(), 3)                     # can't count ours out:
+        self.assertEqual(self.s.read()[("effect", "thorns")], 0)  # it adds 0 instead
+        self.assertAlmostEqual(self._entry(heap, 2)[1], 0.2, places=5)
+
+    def test_full_list_changes_a_source_and_restores_it(self):
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)])      # 8 of 8, say
+        self.s.pin("effect", "thorns", 0.9)
+        self.assertEqual(self._list_len(), 2)
+        self.assertAlmostEqual(self._entry(heap, 1)[1], 0.9, places=5)
+        self.s.pin("effect", "thorns", None)
+        self.assertAlmostEqual(self._entry(heap, 1)[1], 0.3, places=5)
+
+    def test_close_takes_our_entries_out(self):
+        self._effect_list([(0x05, 0.1)], cap=4)
+        self.s.h = 7                                              # close() needs a handle
+        self.s.pin("effect", "thorns", 0.5)
+        with mock.patch.object(memscan.k32, "CloseHandle"):
+            self.s.close()
+        self.s.h, self.s.base = 7, self.obj
+        self.assertEqual(self._list_len(), 1)
+        self.assertEqual(self.s.read()[("effect", "thorns")], 0)
+
+    def test_lifesteal_own_entry_leaves_the_ring_alone(self):
+        self._effect_list([(0x16, 0.3)], cap=4)
+        items = self._item_list([(0x12, 0.03)])
+        self.s.write("effect", "lifesteal", 0.25)
+        self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.25, places=5)
+        ring = struct.unpack("<f", self.mem._read(None, items + offsets.ITEM_VALUE, 4))[0]
+        self.assertAlmostEqual(ring, 0.03, places=5)
 
     def test_thorns_is_the_sum_of_its_effect_entries(self):
         heap = self._effect_list([(0x05, 0.1), (0x16, 0.2), (0x0b, 0.25), (0x16, 0.1)])
@@ -511,8 +579,11 @@ class SessionTest(unittest.TestCase):
     def test_thorns_needs_a_source(self):
         self._effect_list([(0x05, 0.1)])
         self.assertEqual(self.s.read()[("effect", "thorns")], 0)
-        with self.assertRaisesRegex(session.SessionError, "没有任何来源"):
+        with self.assertRaisesRegex(session.SessionError, "没有空位.*改不了"):
             self.s.write("effect", "thorns", 0.5)
+        with self.assertRaises(session.SessionError):
+            self.s.pin("effect", "thorns", 0.5)                   # and no lock is left behind
+        self.assertNotIn(("effect", "thorns"), self.s.pinned())
 
     def test_thorns_lock_survives_the_game_rebuilding_the_list(self):
         heap = self._effect_list([(0x16, 0.3)])

@@ -12,15 +12,16 @@ import game
 import memscan
 import player
 import trainer
-from offsets import (DOTS_MAX_EXTRA, EFFECT_LIST, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
+from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
                      ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED,
                      STAT, STAT_READONLY, STAT_TAIL)
 
 # (kind, name, label, struct format, lockable, unit, group)
 #   kind  stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
 #         player — real run state: a single write sticks until the game changes it
-#         effect — summed from the gear/card effect list each time (荆棘): we
-#                  change the first entry of its tag so the sum is the value
+#         effect — summed from lists each time (荆棘, 生命偷取): we add an entry
+#                  of our own to the talent effect list holding the difference,
+#                  and take it out again on unlock (see _write_effect)
 #   label, order and group follow the game's own character pane (角色 box, then
 #   冒险属性), so a row here reads like the line it changes there.
 #   unit  how the pane shows the raw value; the panels show and take input that way:
@@ -45,7 +46,7 @@ FIELDS = [
     ("stat", "spd", "速度", "<f", True, "+%1", "角色"),
     ("stat", "reg", "回复", "<f", True, "num", "角色"),
     ("stat", "pick", "拾取（码）", "<f", True, "num", "角色"),
-    ("effect", "lifesteal", "生命偷取（装备部分）", "<f", True, "%.1", "冒险属性"),
+    ("effect", "lifesteal", "生命偷取（不含基础）", "<f", True, "%.1", "冒险属性"),
     ("stat", "heal", "击杀治疗", "<f", True, "num", "冒险属性"),
     ("effect", "thorns", "荆棘", "<f", True, "%", "冒险属性"),
     ("stat", "lives", "生命数", "<i", True, "int", "冒险属性"),
@@ -151,6 +152,11 @@ def coerce(kind, name, value):
     return v
 
 
+def _own_tag(name):
+    """The effect-list tag our own entry for name uses."""
+    return next(tag for source, tag in EFFECT_SOURCES[name] if source == "effect")
+
+
 class Session:
     def __init__(self, interval=trainer.PIN_INTERVAL):
         self.interval = interval
@@ -165,6 +171,9 @@ class Session:
         self.events = []                # human-readable notes for the UI / agent log
         self.lost_reason = None         # why the lock thread gave up, for the log
         self._last_vals = None          # last good read(): the hint for relocate()
+        self._own = {}                  # effect name -> (list ptr, index) of our entry
+        self._orig = {}                 # effect name -> (address, value) we overwrote
+        self._effect_lock = threading.RLock()
 
     # --- connect ------------------------------------------------------------
     def locate(self):
@@ -204,6 +213,10 @@ class Session:
         self._thread = None
         with self._lock:
             self._pins.clear()
+        if self.h and self.base is not None:
+            for name in set(self._own) | set(self._orig):
+                self._clear_effect(name)        # locks stop: so do our list entries
+        self._own, self._orig = {}, {}
         if self.h:
             memscan.k32.CloseHandle(self.h)
         self.pid = self.h = self.base = None
@@ -276,13 +289,85 @@ class Session:
     def _effect_total(self, name):
         return sum(v for _a, v in self._effect_entries(name))
 
+    def _own_entry(self, name):
+        """(address of the value, value) of our appended entry, if still in the list."""
+        own = self._own.get(name)
+        if not own:
+            return None
+        ptr, data = self._vec(EFFECT_LIST, 8)
+        list_ptr, i = own
+        if ptr != list_ptr or 8 * i >= len(data) or data[8 * i] != _own_tag(name):
+            return None                     # the list was rebuilt (or shrank): it's gone
+        return ptr + 8 * i + 4, struct.unpack_from("<f", data, 8 * i + 4)[0]
+
     def _write_effect(self, name, value):
-        entries = self._effect_entries(name)
-        if not entries:
-            label = SPEC[("effect", name)][0]
-            raise SessionError(f"{label}：现在没有任何来源可改，先拿到一件带{label}的装备或卡")
-        rest = sum(v for _a, v in entries[1:])
-        if not memscan.write(self.h, entries[0][0], struct.pack("<f", value - rest)):
+        """Make the sum of name's entries equal value.
+
+        Our own entry carries the difference, so the game's sources (talents,
+        cards, jewelry) keep their numbers and unlocking takes ours out again.
+        It goes into a spare slot of the talent list: the Vec grows by doubling,
+        so 7 talents leave one free slot; 8 (or 4, 16) leave none. With no slot
+        we fall back to changing the first source and remember its value.
+        """
+        with self._effect_lock:
+            entries = self._effect_entries(name)
+            own = self._own_entry(name)
+            if own:
+                rest = sum(v for a, v in entries if a != own[0])
+                self._put_f32(own[0], value - rest, name)
+                return
+            orig = self._orig.get(name)
+            if orig and any(a == orig[0] for a, _v in entries):
+                rest = sum(v for a, v in entries if a != orig[0])
+                self._put_f32(orig[0], value - rest, name)
+                return
+            self._orig.pop(name, None)
+            if self._append_own(name, value - sum(v for _a, v in entries)):
+                return
+            if not entries:
+                label = SPEC[("effect", name)][0]
+                raise SessionError(f"{label}：天赋列表没有空位，身上也没有{label}来源，改不了")
+            addr = entries[0][0]
+            self._orig[name] = (addr, entries[0][1])
+            self._put_f32(addr, value - sum(v for _a, v in entries[1:]), name)
+
+    def _append_own(self, name, value):
+        """Put (tag, value) into the list's spare slot and count it in. False if full."""
+        ptr, data = self._vec(EFFECT_LIST, 8)
+        raw = memscan.read(self.h, self.base + EFFECT_CAP, 8)
+        cap = struct.unpack("<Q", raw)[0] if raw and len(raw) == 8 else 0
+        n = len(data) // 8
+        if not ptr or not n < cap <= 1024:
+            return False
+        entry = struct.pack("<B3xf", _own_tag(name), value)
+        if not memscan.write(self.h, ptr + 8 * n, entry):        # the slot first,
+            return False
+        if not memscan.write(self.h, self.base + EFFECT_LIST[1],   # then the length
+                             struct.pack("<Q", n + 1)):
+            return False
+        self._own[name] = (ptr, n)
+        self.events.append(f"{name}: own entry at slot {n} of {cap}")
+        return True
+
+    def _clear_effect(self, name):
+        """Undo what _write_effect did to name: drop our entry, restore a source."""
+        with self._effect_lock:
+            own = self._own_entry(name)
+            if own:
+                _ptr, i = self._own[name]
+                memscan.write(self.h, own[0], struct.pack("<f", 0.0))
+                raw = memscan.read(self.h, self.base + EFFECT_LIST[1], 8)
+                n = struct.unpack("<Q", raw)[0] if raw and len(raw) == 8 else 0
+                if n == i + 1:              # still the last one: count it out
+                    memscan.write(self.h, self.base + EFFECT_LIST[1], struct.pack("<Q", i))
+            orig = self._orig.get(name)
+            if orig and any(a == orig[0] for a, _v in self._effect_entries(name)):
+                memscan.write(self.h, orig[0], struct.pack("<f", orig[1]))
+            self._own.pop(name, None)
+            self._orig.pop(name, None)
+
+    def _put_f32(self, addr, value, name):
+        if not memscan.write(self.h, addr, struct.pack("<f", value)):
             raise SessionError(f"写入 {name} 失败（游戏已退出？）")
 
     def _follow_live(self):
@@ -326,12 +411,17 @@ class Session:
     def pin(self, kind, name, value):
         """Keep re-writing a field; value None releases it."""
         if value is None:
-            with self._lock:
-                self._pins.pop((kind, name), None)
+            with self._effect_lock:
+                with self._lock:
+                    self._pins.pop((kind, name), None)
+                if kind == "effect" and self.connected:
+                    self._clear_effect(name)
             return None
         if not SPEC[(kind, name)][2]:
             raise ValueError(f"{name} cannot be locked")
         v = coerce(kind, name, value)
+        if kind == "effect":
+            self.write(kind, name, v)       # no slot and no source: fail, don't pin
         with self._lock:
             self._pins[(kind, name)] = struct.pack(SPEC[(kind, name)][1], v)
         return v
@@ -349,10 +439,13 @@ class Session:
             pins = list(self._pins.items())
         for (k, n), data in pins:
             if k == "effect":
-                try:
-                    self._write_effect(n, struct.unpack("<f", data)[0])
-                except SessionError:
-                    pass                    # the source went away (gear swapped): skip
+                with self._effect_lock:
+                    if (k, n) not in self.pinned():
+                        continue            # unlocked meanwhile: don't put it back
+                    try:
+                        self._write_effect(n, struct.unpack("<f", data)[0])
+                    except SessionError:
+                        pass                # no slot and no source right now: skip
             else:
                 memscan.write(self.h, self.base + offset(k, n), data)
         return 0

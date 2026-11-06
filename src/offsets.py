@@ -59,10 +59,14 @@ DOTS_MAX_EXTRA = 3          # the game caps extra DoT stacks at 3 (4 stacks show
 
 # Stats the game sums from lists each time instead of storing a total.
 #
-# Effect list: a Vec of 8-byte entries (u8 tag, 3 pad, f32 value), pointer and
-# length in the player object. Thorns = tag 0x16 (pane 荆棘 30% -> 77% with a
-# marker).
+# Effect list: the run's numeric talents (armory picks, one entry each), a Vec
+# of 8-byte entries (u8 tag, 3 pad, f32 value), capacity / pointer / length in
+# the player object. Built when the run starts by pushing (capacity 4, 8, 16...),
+# cards don't touch it. Thorns = tag 0x16 (pane 荆棘 30% -> 77% with a marker).
+# v1118, 7 talents: capacity 8, so one spare slot; appending (tag 0x16, 0.5) and
+# bumping the length showed 荆棘 50% with no thorns talent at all.
 EFFECT_LIST = (0xADC, 0xAE4)        # player-object offsets of the Vec ptr and len
+EFFECT_CAP = 0xAD4                  # ... and its capacity (Rust Vec: cap, ptr, len)
 # Item list (jewelry and the like): a Vec of 24-byte entries, +0x00 pointer to
 # the item's definition (kind byte at +0x44), +0x10 f32 value.
 ITEM_LIST = (0x43C, 0x444)
@@ -70,7 +74,8 @@ ITEM_STRIDE, ITEM_DEF_KIND, ITEM_VALUE = 24, 0x44, 0x10
 # Lifesteal (RVA 0x5F809D0) = timed stacking buffs + class base (a constant
 # table in the exe) + effect tag 0x0e + item kind 0x12. We touch only the two
 # lists, so the panel shows that part; the pane adds the class base (圣骑士 0.6%).
-# NOT yet seen live for lifesteal: layout read from the disassembly only.
+# v1118: a legendary 饮血者指环 read kind 0x12 / 0.03 (3.0%); writing 0.25 moved
+# the pane's 生命偷取 to 25% + class base and stayed.
 EFFECT_SOURCES = {
     "thorns": (("effect", 0x16),),
     "lifesteal": (("effect", 0x0e), ("item", 0x12)),
