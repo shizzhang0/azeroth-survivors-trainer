@@ -27,7 +27,7 @@ HEARTBEAT = 10           # Python: bumped about twice a second while connected
 STATE = 11               # Python: what the agent is doing
 LUA_BEAT = 12            # Lua: bumped ~10x a second while the addon runs
 VALUES = 13              # Python: current value of field i at VALUES + i - 1
-N_FIELDS = 29
+N_FIELDS = 30
 LOCKED = VALUES + N_FIELDS   # Python: 1 if field i is locked, at LOCKED + i - 1
 SIZE = LOCKED + N_FIELDS - 1
 
@@ -36,7 +36,7 @@ SIZE = LOCKED + N_FIELDS - 1
 # addon of another version (a run started before an update) has another tag and
 # maybe a shorter array: we must not write into it. Bump PROTOCOL with any slot
 # change (here and in the Lua file).
-PROTOCOL = 4
+PROTOCOL = 5
 LAYOUT_BASE = 1234000.0
 MAGIC = (918273.645, -556677.889, LAYOUT_BASE + 1000 * PROTOCOL + N_FIELDS)
 LUA_SILENT = 5.0         # seconds without LUA_BEAT moving: that array is dead

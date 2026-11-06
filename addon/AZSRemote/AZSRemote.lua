@@ -8,9 +8,9 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
-local PROTOCOL = 4;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
+local PROTOCOL = 5;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
-	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 42, SIZE = 70 };
+	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 43, SIZE = 72 };
 local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6 };
 
 -- kind, name, label, format ("i" whole number / "f" decimal), lockable, unit, group
@@ -30,6 +30,7 @@ local FIELDS = {
 	{ "stat", "spd", "速度", "f", true, "+%1", "角色" },
 	{ "stat", "reg", "回复", "f", true, "num", "角色" },
 	{ "stat", "pick", "拾取（码）", "f", true, "num", "角色" },
+	{ "effect", "lifesteal", "生命偷取（不含基础）", "f", true, "%.1", "冒险属性" },
 	{ "stat", "heal", "击杀治疗", "f", true, "num", "冒险属性" },
 	{ "effect", "thorns", "荆棘", "f", true, "%", "冒险属性" },
 	{ "stat", "lives", "生命数", "i", true, "int", "冒险属性" },
