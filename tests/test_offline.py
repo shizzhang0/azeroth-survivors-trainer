@@ -345,6 +345,36 @@ class VerifyLayoutTest(unittest.TestCase):
         self.assertEqual(hits["v0.2.0-1036"], [blk])
         self.assertEqual(hits["v0.2.0-977"], [])
 
+    def test_same_layouts_are_swept_once(self):
+        groups = verify_layout.distinct_layouts()
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0][0], ["v0.2.0-1118", "v0.2.0-1115", "v0.2.0-1039",
+                                        "v0.2.0-1036", "v0.2.0-1033"])
+        self.assertEqual(groups[1][0], ["v0.2.0-977"])
+        self.assertEqual(sum(len(n) for n, _l in groups), len(offsets.STAT_LAYOUTS))
+        line = dict(hp=1200.0, cm=2.0, arm=0.05, area=1.1, luck=0.3, gold=1.25)
+        ctx = np.frombuffer(stat_block(luck=0.3, gold=1.25, area=1.1, arm=0.05), dtype=np.float32)
+
+        def run(found):
+            out = io.StringIO()
+            with mock.patch.object(sys, "argv", ["verify_layout.py", "1"]), \
+                    mock.patch.object(memscan, "open_process", return_value=7), \
+                    mock.patch.object(memscan.k32, "CloseHandle"), \
+                    mock.patch.object(memscan, "floats_at", return_value=ctx), \
+                    mock.patch.object(verify_layout, "stat_lines", return_value={"t": line}), \
+                    mock.patch.object(verify_layout, "verify_player"), \
+                    mock.patch.object(verify_layout, "find_struct", return_value=found) as fs, \
+                    contextlib.redirect_stdout(out):
+                verify_layout.main()
+            return fs.call_count, out.getvalue()
+        sweeps, _text = run([])
+        self.assertEqual(sweeps, 2)                               # was one per version: 6
+        sweeps, text = run([0x1000])
+        self.assertEqual(sweeps, 1)
+        self.assertIn("layout that fits: v0.2.0-1118 / v0.2.0-1115 / v0.2.0-1039 / "
+                      "v0.2.0-1036 / v0.2.0-1033", text)
+        self.assertIn("VERDICT: offsets still valid", text)
+
     def test_stale_line_before_a_card_pick_is_not_a_moved_field(self):
         lay = offsets.STAT
         ctx = np.frombuffer(stat_block(luck=0.48, xp=1.69), dtype=np.float32)

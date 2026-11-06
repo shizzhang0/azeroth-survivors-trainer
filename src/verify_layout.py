@@ -5,8 +5,8 @@ whether the offsets we rely on still hold. Writes nothing.
 
   python verify_layout.py [pid]
 
-Known layouts live in offsets.STAT_LAYOUTS; the checker tries each (newest
-first) and reports which one fits.
+Known layouts live in offsets.STAT_LAYOUTS; the checker tries each distinct
+one (newest first) and reports every version that has the one that fits.
 """
 import re
 import sys
@@ -59,6 +59,15 @@ def struct_checks(v, lay):
         (lay["luck"] // 4, luck - 0.02, luck + 0.02),
         (lay["gold"] // 4, gold - 0.02, gold + 0.02),
     ]
+
+
+def distinct_layouts(layouts=LAYOUTS):
+    """[(version names, layout)], newest first. Versions with the same offsets
+    (1118 back to 1033) share one entry, and so one memory sweep."""
+    out = {}
+    for name, lay in layouts.items():
+        out.setdefault(tuple(sorted(lay.items())), ([], lay))[0].append(name)
+    return list(out.values())
 
 
 def find_struct(h, v, lay):
@@ -165,10 +174,10 @@ def main():
 
     for text, v in lines.items():
         hit = None
-        for name, lay in LAYOUTS.items():
+        for names, lay in distinct_layouts():
             cands = find_struct(h, v, lay)
             if cands:
-                hit = (name, lay, cands)
+                hit = (" / ".join(names), lay, cands)
                 break
         if not hit:
             continue
