@@ -256,35 +256,43 @@ class Session:
         blob = memscan.read(self.h, self.base, player.OBJ_SIZE)
         if not blob or len(blob) < player.OBJ_SIZE or not self.alive(blob):
             return None
-        vals = {(k, n): (self._effect_total(n) if k == "effect"
+        lists = {}                          # thorns and lifesteal share the talent list
+        vals = {(k, n): (self._effect_total(n, lists) if k == "effect"
                          else struct.unpack_from(fmt, blob, offset(k, n))[0])
                 for (k, n), (_l, fmt, _c) in SPEC.items()}
         self._last_vals = vals
         return vals
 
     # --- summed stats (荆棘, 生命偷取): the game adds list entries each time -----
-    def _vec(self, field_offsets, stride):
-        """(pointer, raw bytes) of a Vec whose ptr/len live in the player object."""
+    def _vec(self, field_offsets, stride, cache=None):
+        """(pointer, raw bytes) of a Vec whose ptr/len live in the player object.
+        With a `cache` dict, each list is read once for everything that pass
+        looks at (read(): both summed stats; tick(): our entry and the sum)."""
+        if cache is not None and field_offsets in cache:
+            return cache[field_offsets]
+        out = (0, b"")
         raw = memscan.read(self.h, self.base + field_offsets[0], 8)
         rawn = memscan.read(self.h, self.base + field_offsets[1], 8)
-        if not raw or not rawn:
-            return 0, b""
-        ptr, n = struct.unpack("<Q", raw)[0], struct.unpack("<Q", rawn)[0]
-        if not ptr or not 0 < n < 1024:
-            return 0, b""
-        data = memscan.read(self.h, ptr, stride * n)
-        return (ptr, data) if data and len(data) == stride * n else (0, b"")
+        if raw and rawn:
+            ptr, n = struct.unpack("<Q", raw)[0], struct.unpack("<Q", rawn)[0]
+            if ptr and 0 < n < 1024:
+                data = memscan.read(self.h, ptr, stride * n)
+                if data and len(data) == stride * n:
+                    out = (ptr, data)
+        if cache is not None:
+            cache[field_offsets] = out
+        return out
 
-    def _effect_entries(self, name):
+    def _effect_entries(self, name, cache=None):
         """[(address of the f32 value, value)] for every list entry that feeds name."""
         out = []
         for source, tag in EFFECT_SOURCES[name]:
             if source == "effect":
-                ptr, data = self._vec(EFFECT_LIST, 8)
+                ptr, data = self._vec(EFFECT_LIST, 8, cache)
                 out += [(ptr + 8 * i + 4, struct.unpack_from("<f", data, 8 * i + 4)[0])
                         for i in range(len(data) // 8) if data[8 * i] == tag]
             else:                                   # items: kind sits in the definition
-                ptr, data = self._vec(ITEM_LIST, ITEM_STRIDE)
+                ptr, data = self._vec(ITEM_LIST, ITEM_STRIDE, cache)
                 for i in range(len(data) // ITEM_STRIDE):
                     e = ITEM_STRIDE * i
                     kind = memscan.read(self.h, struct.unpack_from("<Q", data, e)[0] + ITEM_DEF_KIND, 1)
@@ -293,15 +301,15 @@ class Session:
                                     struct.unpack_from("<f", data, e + ITEM_VALUE)[0]))
         return out
 
-    def _effect_total(self, name):
-        return sum(v for _a, v in self._effect_entries(name))
+    def _effect_total(self, name, cache=None):
+        return sum(v for _a, v in self._effect_entries(name, cache))
 
-    def _own_entry(self, name):
+    def _own_entry(self, name, cache=None):
         """(address of the value, value) of our appended entry, if still in the list."""
         own = self._own.get(name)
         if not own:
             return None
-        ptr, data = self._vec(EFFECT_LIST, 8)
+        ptr, data = self._vec(EFFECT_LIST, 8, cache)
         list_ptr, i = own
         if ptr != list_ptr or 8 * i >= len(data) or data[8 * i] != _own_tag(name):
             return None                     # the list was rebuilt (or shrank): it's gone
@@ -338,6 +346,18 @@ class Session:
             addr = entries[0][0]
             self._orig[name] = (addr, entries[0][1])
             self._put_f32(addr, value - sum(v for _a, v in entries[1:]), name)
+
+    def _effect_holds(self, name, value):
+        """Is our share still in the list (own entry, or the source we changed)
+        and the sum already value? Then a lock tick has nothing to write."""
+        lists = {}
+        own = self._own_entry(name, lists)
+        mine = own[0] if own else self._orig.get(name, (None,))[0]
+        entries = self._effect_entries(name, lists)
+        if mine is None or all(a != mine for a, _v in entries):
+            return False                    # gone: the game rebuilt the list
+        # f32 entries summed in f64: ours was stored as value - rest, rounded
+        return math.isclose(sum(v for _a, v in entries), value, rel_tol=1e-6, abs_tol=1e-6)
 
     def _list_header(self):
         """(cap, ptr, len) of the talent list, or None if unreadable."""
@@ -506,8 +526,11 @@ class Session:
                 with self._effect_lock:
                     if (k, n) not in self.pinned():
                         continue            # unlocked meanwhile: don't put it back
+                    value = struct.unpack("<f", data)[0]
+                    if self._effect_holds(n, value):
+                        continue            # nothing moved since the last tick
                     try:
-                        self._write_effect(n, struct.unpack("<f", data)[0])
+                        self._write_effect(n, value)
                     except SessionError:
                         pass                # no slot and no source right now: skip
             else:

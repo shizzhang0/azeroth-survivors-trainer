@@ -674,6 +674,44 @@ class SessionTest(unittest.TestCase):
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
 
+    def test_effect_lock_writes_only_when_the_sum_moves(self):
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)], cap=4)
+        self.s.pin("effect", "thorns", 0.77)
+        memscan.write.reset_mock()
+        for _ in range(3):
+            self.s.tick()
+        memscan.write.assert_not_called()                         # every 20 ms: nothing to do
+        self.mem.put(heap + 12, struct.pack("<f", 0.5))           # the talent changed
+        self.s.tick()
+        self.assertTrue(memscan.write.called)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        rebuilt = self.mem.add(0x98000, 0x100)                    # a new list, ours not in it
+        self.mem.put(rebuilt, struct.pack("<B3xf", 0x16, 0.3))
+        self.mem.put(self.obj + offsets.EFFECT_CAP, struct.pack("<QQQ", 4, rebuilt, 1))
+        memscan.write.reset_mock()
+        self.s.tick()
+        self.assertEqual(self._list_len(), 2)                     # our entry again
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        memscan.write.reset_mock()
+        self.s.tick()
+        memscan.write.assert_not_called()
+
+    def test_read_reads_each_list_once(self):
+        self._effect_list([(0x16, 0.3), (0x0e, 0.01)])
+        self._item_list([(0x07, 0.5), (0x12, 0.021)])
+        heads = {self.obj + offsets.EFFECT_LIST[0]: 0, self.obj + offsets.ITEM_LIST[0]: 0}
+        fake_read = memscan.read
+
+        def counting(h, addr, size):
+            if addr in heads:
+                heads[addr] += 1
+            return fake_read(h, addr, size)
+        with mock.patch.object(memscan, "read", side_effect=counting):
+            v = self.s.read()
+        self.assertAlmostEqual(v[("effect", "thorns")], 0.3, places=5)
+        self.assertAlmostEqual(v[("effect", "lifesteal")], 0.031, places=5)
+        self.assertEqual(list(heads.values()), [1, 1])            # was 2 for the talent list
+
     def _item_list(self, items):
         """Point the hero's item Vec at `items` [(definition kind, value)]."""
         heap = self.mem.add(0xA0000, 0x2000)
