@@ -493,21 +493,38 @@ class Session:
 
     # --- lock ---------------------------------------------------------------
     def pin(self, kind, name, value):
-        """Keep re-writing a field; value None releases it."""
+        """Write a field now and keep re-writing it; value None releases it.
+        If the write fails the field keeps the lock it had before (or none)."""
+        key = (kind, name)
         if value is None:
             with self._effect_lock:
                 with self._lock:
-                    self._pins.pop((kind, name), None)
+                    self._pins.pop(key, None)
                 if kind == "effect" and self.connected:
                     self._clear_effect(name)
             return None
-        if not SPEC[(kind, name)][2]:
+        if not SPEC[key][2]:
             raise ValueError(f"{name} cannot be locked")
         v = coerce(kind, name, value)
+        data = struct.pack(SPEC[key][1], v)
         if kind == "effect":
             self.write(kind, name, v)       # no slot and no source: fail, don't pin
+            with self._lock:
+                self._pins[key] = data
+            return v
+        # pinned before the write: the liveness check must skip a value we put
+        # out of the usual range (幸运 +50000%) from the first tick on
         with self._lock:
-            self._pins[(kind, name)] = struct.pack(SPEC[(kind, name)][1], v)
+            before, self._pins[key] = self._pins.get(key), data
+        try:
+            self.write(kind, name, v)
+        except SessionError:
+            with self._lock:
+                if before is None:
+                    self._pins.pop(key, None)
+                else:
+                    self._pins[key] = before
+            raise
         return v
 
     def pinned(self):

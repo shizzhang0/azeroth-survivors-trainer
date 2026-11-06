@@ -442,6 +442,31 @@ class SessionTest(unittest.TestCase):
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("stat", "luck")], 5.0)
 
+    def test_lock_takes_effect_at_once(self):
+        self.s.pin("stat", "luck", 5)                            # no tick yet
+        self.s.pin("player", "chest", 1)
+        v = self.s.read()
+        self.assertAlmostEqual(v[("stat", "luck")], 5.0)
+        self.assertEqual(v[("player", "chest")], 1)
+
+    def test_lock_that_cannot_write_keeps_the_old_one(self):
+        self.s.pin("stat", "luck", 3)
+        with mock.patch.object(memscan, "write", return_value=False):
+            with self.assertRaises(session.SessionError):
+                self.s.pin("stat", "luck", 5)
+            with self.assertRaises(session.SessionError):
+                self.s.pin("stat", "dmg", 2)
+        self.assertEqual(self.s.pinned(), {("stat", "luck")})
+        self.s.tick()
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 3.0)
+
+    def test_effect_lock_writes_once(self):
+        self._effect_list([(0x16, 0.3)], cap=4)
+        with mock.patch.object(self.s, "_write_effect", wraps=self.s._write_effect) as w:
+            self.s.pin("effect", "thorns", 0.5)
+        self.assertEqual(w.call_count, 1)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.5, places=5)
+
     def test_out_of_range_lock_does_not_kill_the_target(self):
         # luck=500 is outside STAT_RANGES; the liveness check must skip pinned fields
         self.s.pin("stat", "luck", 500)

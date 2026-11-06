@@ -80,8 +80,7 @@ def handle(session, ready, cmd, arg1, arg2):
         if cmd == mb.WRITE:
             return mb.OK, f"{label} = {show(unit, session.write(kind, name, arg2))}"
         if cmd == mb.LOCK:
-            v = session.pin(kind, name, arg2)
-            session.write(kind, name, v)      # take effect now, not at the next tick
+            v = session.pin(kind, name, arg2)     # writes it now, then keeps it there
             return mb.OK, f"lock {label} = {show(unit, v)}"
         if cmd == mb.UNLOCK:
             session.pin(kind, name, None)

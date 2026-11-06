@@ -260,7 +260,7 @@ class FakeSession:
             self.pins.pop((kind, name), None)
             return None
         self.pins[(kind, name)] = float(value)
-        return float(value)
+        return self.write(kind, name, value)        # like Session.pin: in effect at once
 
     def write(self, kind, name, value):
         self.writes.append((kind, name, float(value)))
@@ -377,6 +377,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(set(s.pins), {("stat", "luck"), ("player", "chest")})
         self.assertIn(("player", "level", 30.0), s.writes)
         self.assertEqual(len(lines), 3)
+        self.assertEqual(len(s.writes), 3)                         # one write each
 
     def test_counters_and_gold_are_written_once_not_locked(self):
         # a locked banish count let a run banish its card pool empty (v1118)
@@ -448,6 +449,7 @@ class HandleTest(unittest.TestCase):
         self.assertEqual(agent.handle(s, False, mb.LOCK, luck, 5)[0], mb.NOT_READY)
         self.assertEqual(agent.handle(s, True, mb.LOCK, luck, 5)[0], mb.OK)
         self.assertEqual(s.pins, {("stat", "luck"): 5.0})
+        self.assertEqual(s.writes, [("stat", "luck", 5.0)])      # pin's own write, no second one
         self.assertEqual(agent.handle(s, True, mb.UNLOCK, luck, 0)[0], mb.OK)
         self.assertEqual(s.pins, {})
         self.assertEqual(agent.handle(s, True, mb.LOCK, 99, 5)[0], mb.BAD_INPUT)
