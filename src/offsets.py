@@ -59,7 +59,9 @@ DOTS_MAX_EXTRA = 3          # the game caps extra DoT stacks at 3 (4 stacks show
 
 # Stats the game sums from lists each time instead of storing a total.
 #
-# Effect list: the run's numeric talents (armory picks, one entry each), a Vec
+# Effect list: the run's talent stats (armory picks, one entry per stat kind,
+# same-kind talents summed; tags in docs/OFFSETS.md: 0 dmg, 1 cooldown, 2 max hp,
+# 3 crit, 4 crit dmg, 5 damage taken, 6 regen, 7 speed, 0x0e lifesteal), a Vec
 # of 8-byte entries (u8 tag, 3 pad, f32 value), capacity / pointer / length in
 # the player object. Built when the run starts by pushing (capacity 4, 8, 16...),
 # cards don't touch it. Thorns = tag 0x16 (pane 荆棘 30% -> 77% with a marker).
