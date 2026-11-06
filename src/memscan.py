@@ -57,6 +57,10 @@ k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_voi
 k32.WriteProcessMemory.restype = wintypes.BOOL
 k32.WriteProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
                                    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+k32.VirtualAllocEx.restype = ctypes.c_void_p
+k32.VirtualAllocEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_size_t,
+                               wintypes.DWORD, wintypes.DWORD]
+MEM_COMMIT_RESERVE, PAGE_READWRITE = 0x3000, 0x04
 
 
 def open_process(pid, write=False):
@@ -151,6 +155,12 @@ def write(h, addr, data):
     ok = k32.WriteProcessMemory(h, ctypes.c_void_p(addr), buf, len(data),
                                 ctypes.byref(got))
     return bool(ok) and got.value == len(data)
+
+
+def alloc(h, size=0x1000):
+    """Commit a zeroed read/write block in the process (needs a write handle).
+    Returns its address or None. Never freed: the game may still point at it."""
+    return k32.VirtualAllocEx(h, None, size, MEM_COMMIT_RESERVE, PAGE_READWRITE) or None
 
 
 def floats_at(h, addr, count):

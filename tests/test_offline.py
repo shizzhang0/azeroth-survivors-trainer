@@ -37,6 +37,11 @@ class FakeMemory:
 
     def __init__(self):
         self.regions = {}
+        self.next_page = 0x7000000
+
+    def _alloc(self, h, size=0x1000):
+        page, self.next_page = self.next_page, self.next_page + 0x10000
+        return self.add(page, size)
 
     def add(self, base, size):
         self.regions[base] = bytearray(size)
@@ -62,7 +67,7 @@ class FakeMemory:
 
     def patch(self):
         return mock.patch.multiple(memscan, regions=self._regions, read=self._read,
-                                   CHUNK=SMALL_CHUNK)
+                                   alloc=self._alloc, CHUNK=SMALL_CHUNK)
 
 
 def stat_block(**over):
@@ -540,8 +545,55 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.s.read()[("effect", "thorns")], 0)  # it adds 0 instead
         self.assertAlmostEqual(self._entry(heap, 2)[1], 0.2, places=5)
 
-    def test_full_list_changes_a_source_and_restores_it(self):
+    def _header(self):
+        return struct.unpack("<QQQ", self.mem._read(None, self.obj + offsets.EFFECT_CAP, 24))
+
+    def test_full_list_moves_to_our_page_and_back(self):
         heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)])      # 8 of 8, say
+        self.s.pin("effect", "thorns", 0.9)
+        cap, ptr, n = self._header()
+        self.assertEqual((cap, n), (0, 3))                        # cap 0: never freed by the game
+        self.assertNotEqual(ptr, heap)
+        self.assertEqual(self._entry(ptr, 0), self._entry(heap, 0))   # a copy...
+        self.assertAlmostEqual(self._entry(ptr, 1)[1], 0.3, places=5)  # talent untouched
+        self.assertEqual(self._entry(ptr, 2)[0], 0x16)            # ...plus ours
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
+        self.s.pin("effect", "lifesteal", 0.1)                    # second one: same page
+        self.assertEqual(self._header()[1:], (ptr, 4))
+        self.s.pin("effect", "thorns", None)
+        self.assertEqual(self._header()[1], ptr)                  # lifesteal still ours
+        self.s.pin("effect", "lifesteal", None)
+        self.assertEqual(self._header(), (2, heap, 2))            # the game's buffer again
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
+
+    def test_no_talent_stats_at_all(self):
+        # druid with no talent stats: empty Vec, dangling pointer 4, capacity 0
+        self.mem.put(self.obj + offsets.EFFECT_CAP, struct.pack("<QQQ", 0, 4, 0))
+        self.s.pin("effect", "thorns", 0.4)
+        self.s.pin("effect", "lifesteal", 0.1)
+        v = self.s.read()
+        self.assertAlmostEqual(v[("effect", "thorns")], 0.4, places=5)
+        self.assertAlmostEqual(v[("effect", "lifesteal")], 0.1, places=5)
+        self.assertEqual(self._header()[0], 0)
+        self.s.pin("effect", "thorns", None)
+        self.s.pin("effect", "lifesteal", None)
+        self.assertEqual(self._header(), (0, 4, 0))
+
+    def test_new_run_after_a_move_is_left_alone(self):
+        self._effect_list([(0x05, 0.1)])
+        self.s.pin("effect", "thorns", 0.5)
+        fresh = self.mem.add(0x95000, 0x100)                      # the game starts over
+        self.mem.put(self.obj + offsets.EFFECT_CAP, struct.pack("<QQQ", 4, fresh, 0))
+        with self.s._lock:
+            self.s._pins.clear()
+        self.s._clear_effect("thorns")
+        self.assertEqual(self._header(), (4, fresh, 0))           # not pointed at the old run
+
+    def test_full_list_changes_a_source_when_it_cannot_move(self):
+        no_page = mock.patch.object(memscan, "alloc", return_value=None)
+        no_page.start()
+        self.addCleanup(no_page.stop)
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)])
         self.s.pin("effect", "thorns", 0.9)
         self.assertEqual(self._list_len(), 2)
         self.assertAlmostEqual(self._entry(heap, 1)[1], 0.9, places=5)
@@ -569,16 +621,17 @@ class SessionTest(unittest.TestCase):
     def test_thorns_is_the_sum_of_its_effect_entries(self):
         heap = self._effect_list([(0x05, 0.1), (0x16, 0.2), (0x0b, 0.25), (0x16, 0.1)])
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
-        self.s.write("effect", "thorns", 0.77)                   # first entry takes the rest
+        self.s.write("effect", "thorns", 0.77)                   # ours carries the 0.47
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
-        first = struct.unpack("<f", self.mem._read(None, heap + 8 + 4, 4))[0]
-        self.assertAlmostEqual(first, 0.67, places=5)
-        other = struct.unpack("<f", self.mem._read(None, heap + 4, 4))[0]
-        self.assertAlmostEqual(other, 0.1, places=5)            # other tags untouched
+        for i, v in enumerate([0.1, 0.2, 0.25, 0.1]):             # the game's entries untouched
+            self.assertAlmostEqual(self._entry(heap, i)[1], v, places=5)
 
-    def test_thorns_needs_a_source(self):
+    def test_thorns_needs_a_slot_or_a_source(self):
         self._effect_list([(0x05, 0.1)])
         self.assertEqual(self.s.read()[("effect", "thorns")], 0)
+        no_page = mock.patch.object(memscan, "alloc", return_value=None)
+        no_page.start()
+        self.addCleanup(no_page.stop)
         with self.assertRaisesRegex(session.SessionError, "没有空位.*改不了"):
             self.s.write("effect", "thorns", 0.5)
         with self.assertRaises(session.SessionError):

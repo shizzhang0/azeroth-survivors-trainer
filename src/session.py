@@ -12,7 +12,7 @@ import game
 import memscan
 import player
 import trainer
-from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
+from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_PAGE_ENTRIES, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
                      ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED,
                      STAT, STAT_READONLY, STAT_TAIL)
 
@@ -173,6 +173,7 @@ class Session:
         self._last_vals = None          # last good read(): the hint for relocate()
         self._own = {}                  # effect name -> (list ptr, index) of our entry
         self._orig = {}                 # effect name -> (address, value) we overwrote
+        self._moved = None              # the talent list on our page: page and its old (cap, ptr, len)
         self._effect_lock = threading.RLock()
 
     # --- connect ------------------------------------------------------------
@@ -216,7 +217,9 @@ class Session:
         if self.h and self.base is not None:
             for name in set(self._own) | set(self._orig):
                 self._clear_effect(name)        # locks stop: so do our list entries
-        self._own, self._orig = {}, {}
+            if self._moved:
+                self._restore_list()
+        self._own, self._orig, self._moved = {}, {}, None
         if self.h:
             memscan.k32.CloseHandle(self.h)
         self.pid = self.h = self.base = None
@@ -306,8 +309,9 @@ class Session:
         Our own entry carries the difference, so the game's sources (talents,
         cards, jewelry) keep their numbers and unlocking takes ours out again.
         It goes into a spare slot of the talent list: the Vec grows by doubling,
-        so 7 talents leave one free slot; 8 (or 4, 16) leave none. With no slot
-        we fall back to changing the first source and remember its value.
+        so 7 talent stats leave one free slot; 8 (or 4, 16, or none) leave none.
+        Then the list moves to a page of ours (_move_list). Only if that fails
+        do we change the first source, remembering its value.
         """
         with self._effect_lock:
             entries = self._effect_entries(name)
@@ -331,23 +335,77 @@ class Session:
             self._orig[name] = (addr, entries[0][1])
             self._put_f32(addr, value - sum(v for _a, v in entries[1:]), name)
 
+    def _list_header(self):
+        """(cap, ptr, len) of the talent list, or None if unreadable."""
+        raw = memscan.read(self.h, self.base + EFFECT_CAP, 24)
+        if not raw or len(raw) < 24:
+            return None
+        return struct.unpack("<QQQ", raw)
+
+    def _put_u64(self, off, value):
+        return memscan.write(self.h, self.base + off, struct.pack("<Q", value))
+
     def _append_own(self, name, value):
-        """Put (tag, value) into the list's spare slot and count it in. False if full."""
-        ptr, data = self._vec(EFFECT_LIST, 8)
-        raw = memscan.read(self.h, self.base + EFFECT_CAP, 8)
-        cap = struct.unpack("<Q", raw)[0] if raw and len(raw) == 8 else 0
-        n = len(data) // 8
-        if not ptr or not n < cap <= 1024:
+        """Put (tag, value) after the last entry and count it in. False if we can't."""
+        head = self._list_header()
+        if not head:
             return False
+        cap, ptr, n = head
+        on_page = self._moved and ptr == self._moved["page"]
+        if on_page:
+            room = n < EFFECT_PAGE_ENTRIES
+        else:
+            room = ptr and n < cap <= 1024
+        if not room:
+            if on_page or not self._move_list(head):
+                return False
+            cap, ptr, n = self._list_header()
         entry = struct.pack("<B3xf", _own_tag(name), value)
         if not memscan.write(self.h, ptr + 8 * n, entry):        # the slot first,
             return False
-        if not memscan.write(self.h, self.base + EFFECT_LIST[1],   # then the length
-                             struct.pack("<Q", n + 1)):
+        if not self._put_u64(EFFECT_LIST[1], n + 1):              # then the length
             return False
         self._own[name] = (ptr, n)
-        self.events.append(f"{name}: own entry at slot {n} of {cap}")
+        self.events.append(f"{name}: own entry at slot {n}")
         return True
+
+    def _move_list(self, head):
+        """Point the talent list at a page of ours holding a copy of its entries.
+
+        Capacity goes to 0 first: from then on the game treats the buffer as not
+        its own (Rust frees a Vec's buffer only when the capacity isn't 0), so
+        neither our page nor, until we point it back, its old buffer is freed.
+        Reads use ptr and len only; a push would land on our page (len != cap,
+        no grow). The old buffer just stays put for _restore_list.
+        """
+        cap, ptr, n = head
+        if n > 1024 or (n and not ptr):
+            return False
+        data = memscan.read(self.h, ptr, 8 * n) if n else b""
+        if n and (not data or len(data) != 8 * n):
+            return False
+        page = memscan.alloc(self.h)
+        if not page or (data and not memscan.write(self.h, page, data)):
+            return False
+        if not self._put_u64(EFFECT_CAP, 0):
+            return False
+        if not self._put_u64(EFFECT_LIST[0], page):
+            self._put_u64(EFFECT_CAP, cap)
+            return False
+        self._moved = {"page": page, "cap": cap, "ptr": ptr, "len": n}
+        self.events.append(f"talent list moved to our page 0x{page:X} (was {n} of {cap})")
+        return True
+
+    def _restore_list(self):
+        """Point the talent list back at the game's own buffer, if it's still on ours."""
+        moved, self._moved = self._moved, None
+        head = self._list_header()
+        if not moved or not head or head[1] != moved["page"]:
+            return                          # a new run / rebuilt list: nothing of ours left
+        self._put_u64(EFFECT_LIST[1], moved["len"])   # within either buffer,
+        self._put_u64(EFFECT_LIST[0], moved["ptr"])   # capacity still 0: not freed,
+        self._put_u64(EFFECT_CAP, moved["cap"])       # then it owns its buffer again
+        self.events.append("talent list back on the game's buffer")
 
     def _clear_effect(self, name):
         """Undo what _write_effect did to name: drop our entry, restore a source."""
@@ -365,6 +423,8 @@ class Session:
                 memscan.write(self.h, orig[0], struct.pack("<f", orig[1]))
             self._own.pop(name, None)
             self._orig.pop(name, None)
+            if self._moved and not self._own:
+                self._restore_list()
 
     def _put_f32(self, addr, value, name):
         if not memscan.write(self.h, addr, struct.pack("<f", value)):
