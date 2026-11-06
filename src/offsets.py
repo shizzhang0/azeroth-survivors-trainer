@@ -69,6 +69,11 @@ DOTS_MAX_EXTRA = 3          # the game caps extra DoT stacks at 3 (4 stacks show
 # bumping the length showed 荆棘 50% with no thorns talent at all.
 EFFECT_LIST = (0xADC, 0xAE4)        # player-object offsets of the Vec ptr and len
 EFFECT_CAP = 0xAD4                  # ... and its capacity (Rust Vec: cap, ptr, len)
+# With no spare slot (no talent stats at all: capacity 0; or exactly 4 / 8 kinds)
+# the tools point the Vec at a page of their own holding a copy plus their entry,
+# with capacity 0: Rust frees a Vec's buffer only when its capacity isn't 0, so
+# the game never hands our page to its allocator. Unlocking points it back.
+EFFECT_PAGE_ENTRIES = 512           # 8-byte entries in that 4 KiB page
 # Item list (jewelry and the like): a Vec of 24-byte entries, +0x00 pointer to
 # the item's definition (kind byte at +0x44), +0x10 f32 value.
 ITEM_LIST = (0x43C, 0x444)
