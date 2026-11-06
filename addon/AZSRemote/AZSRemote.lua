@@ -8,9 +8,9 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
-local PROTOCOL = 3;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
+local PROTOCOL = 4;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
-	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 39, SIZE = 64 };
+	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 42, SIZE = 70 };
 local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6 };
 
 -- kind, name, label, format ("i" whole number / "f" decimal), lockable, unit, group
@@ -31,10 +31,13 @@ local FIELDS = {
 	{ "stat", "reg", "回复", "f", true, "num", "角色" },
 	{ "stat", "pick", "拾取（码）", "f", true, "num", "角色" },
 	{ "stat", "heal", "击杀治疗", "f", true, "num", "冒险属性" },
+	{ "effect", "thorns", "荆棘", "f", true, "%", "冒险属性" },
+	{ "stat", "lives", "生命数", "i", true, "int", "冒险属性" },
 	{ "stat", "xp", "经验值", "f", true, "+%1", "冒险属性" },
 	{ "stat", "gold", "金币", "f", true, "+%1", "冒险属性" },
 	{ "stat", "luck", "幸运", "f", true, "+%", "冒险属性" },
 	{ "stat", "bp", "增益强度", "f", true, "+%", "冒险属性" },
+	{ "stat", "dots", "持续伤害层数", "i", true, "dots", "冒险属性" },
 	{ "stat", "doth", "持续伤害急速", "f", true, "+%", "冒险属性" },
 	{ "player", "gold", "金币数量", "i", true, "int", "状态" },
 	{ "player", "hp", "当前血量", "f", true, "num", "状态" },
@@ -73,7 +76,12 @@ local function send(cmd, field, value)
 end
 
 -- --- game units <-> raw values (mirrors to_game/from_game/show/parse in session.py)
+local DOTS_MAX_EXTRA = 3;   -- the game caps extra DoT stacks at 3 (4 shown)
+
 local function toGame(unit, v)
+	if ( unit == "dots" ) then
+		return math.min(math.max(v, 0), DOTS_MAX_EXTRA) + 1;
+	end
 	if ( unit == "%" or unit == "%.1" or unit == "+%" ) then
 		return v * 100;
 	elseif ( unit == "+%1" ) then
@@ -85,6 +93,9 @@ local function toGame(unit, v)
 end
 
 local function fromGame(unit, x)
+	if ( unit == "dots" ) then
+		return math.min(math.max(x - 1, 0), DOTS_MAX_EXTRA);
+	end
 	if ( unit == "%" or unit == "%.1" or unit == "+%" ) then
 		return x / 100;
 	elseif ( unit == "+%1" ) then
@@ -218,7 +229,7 @@ local function addRow(i, y)
 
 	eb:SetScript("OnEnterPressed", function()
 		this:ClearFocus();
-		if ( kind == "stat" ) then          -- the game recomputes stats: Enter locks
+		if ( kind ~= "player" ) then        -- the game recomputes stats: Enter locks
 			if ( row.lock ) then
 				row.lock:SetChecked(1);
 			end

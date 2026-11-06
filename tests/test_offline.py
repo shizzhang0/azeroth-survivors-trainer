@@ -489,6 +489,50 @@ class SessionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.s.write("stat", "targets", 1.5)
 
+    def _effect_list(self, entries):
+        """Point the hero's effect Vec at `entries` [(tag, value)] (8 bytes each)."""
+        heap = self.mem.add(0x90000, 0x1000)
+        buf = b"".join(struct.pack("<B3xf", t, v) for t, v in entries)
+        self.mem.put(heap, buf)
+        self.mem.put(self.obj + offsets.EFFECT_LIST[0], struct.pack("<Q", heap))
+        self.mem.put(self.obj + offsets.EFFECT_LIST[1], struct.pack("<Q", len(entries)))
+        return heap
+
+    def test_thorns_is_the_sum_of_its_effect_entries(self):
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.2), (0x0b, 0.25), (0x16, 0.1)])
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
+        self.s.write("effect", "thorns", 0.77)                   # first entry takes the rest
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        first = struct.unpack("<f", self.mem._read(None, heap + 8 + 4, 4))[0]
+        self.assertAlmostEqual(first, 0.67, places=5)
+        other = struct.unpack("<f", self.mem._read(None, heap + 4, 4))[0]
+        self.assertAlmostEqual(other, 0.1, places=5)            # other tags untouched
+
+    def test_thorns_needs_a_source(self):
+        self._effect_list([(0x05, 0.1)])
+        self.assertEqual(self.s.read()[("effect", "thorns")], 0)
+        with self.assertRaisesRegex(session.SessionError, "没有任何来源"):
+            self.s.write("effect", "thorns", 0.5)
+
+    def test_thorns_lock_survives_the_game_rebuilding_the_list(self):
+        heap = self._effect_list([(0x16, 0.3)])
+        self.s.pin("effect", "thorns", 0.9)
+        self.s.tick()
+        self.mem.put(heap + 4, struct.pack("<f", 0.3))           # gear recomputed
+        self.s.tick()
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
+
+    def test_lives_and_dot_stacks(self):
+        # v1118 stats-line code: lives at block +0x60, stacks shown = min([+0x48], 3) + 1
+        self.s.write("stat", "lives", 3)
+        self.s.write("stat", "dots", session.parse("dots", "4"))  # 4 stacks typed
+        v = self.s.read()
+        self.assertEqual(v[("stat", "lives")], 3)
+        self.assertEqual(v[("stat", "dots")], 3)                  # stored as extra stacks
+        self.assertEqual(session.show("dots", v[("stat", "dots")]), "4")
+        self.assertEqual(session.parse("dots", "9"), 3)           # the game's cap
+        self.assertEqual(session.show("dots", 0), "1")
+
     def test_does_not_switch_while_ours_moves(self):
         twin = self.mem.add(0x60000, 0x2000)
         self.mem.put(twin, player_object(gold=120, chest=31))

@@ -49,10 +49,20 @@ STAT = STAT_LAYOUTS[GAME_VERSION]
 
 # Tail fields. v1118: confirmed by pinning marker values and reading the
 # character pane (目标数 +7, 回响 22%, 击杀治疗 33, 增益强度 +44%, 持续伤害急速 +77%).
-STAT_TAIL = {"targets": 56, "echo": 60, "heal": 64, "bp": 68, "doth": 76}
-STAT_INT = {"targets"}      # i32, not f32: extra targets per spell
-# +72 is 0 and a marker of 55 changed nothing on the pane: unknown, never written.
-# Lifesteal, thorns, lives and DoT stacks are not in this block.
+# v1118, from the code that prints the stats line (RVA 0x5F5E950): it reads
+# lives at +0x60 and shows DoT stacks as min([+0x48], 3) + 1 — confirmed on the
+# pane with markers (生命数 3, 持续伤害层数 3).
+STAT_TAIL = {"targets": 56, "echo": 60, "heal": 64, "bp": 68, "dots": 72, "doth": 76,
+             "lives": 96}
+STAT_INT = {"targets", "dots", "lives"}     # i32, not f32
+DOTS_MAX_EXTRA = 3          # the game caps extra DoT stacks at 3 (4 stacks shown)
+
+# Effects of gear and cards: a Vec of 8-byte entries (u8 tag, 3 pad, f32 value)
+# the game sums per tag each time. Its pointer and length sit in the player
+# object. Thorns is tag 0x16 (pane 荆棘 30% -> 77% with a marker). Lifesteal
+# mixes this list (tag 0x0e), class base and cards: not handled.
+EFFECT_LIST = (0xADC, 0xAE4)        # player-object offsets of the Vec ptr and len
+EFFECT_TAGS = {"thorns": 0x16}
 
 # Never written by the tools: x36 holds 0.6. v1118: markers 0.07 and 3.0 left the
 # pane's 生命偷取 at 0.6%, so despite the match it is not lifesteal. Meaning unknown.
