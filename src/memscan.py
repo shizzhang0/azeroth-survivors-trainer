@@ -130,6 +130,21 @@ def iter_chunks(h, overlap=0, chunk=None):
             off += chunk
 
 
+def sweep(h, visitors, chunk=None):
+    """One pass over memory for several scanners at once.
+
+    visitors: [(overlap, visit)]. visit(addr, raw, end) is called for every
+    chunk, and raw[:end] is exactly what iter_chunks(h, overlap) would have
+    yielded; raw itself may run on (another visitor wanted more overlap), so
+    a visitor looks no further than end. Reading is most of a sweep's time.
+    """
+    chunk = chunk or CHUNK
+    most = max(overlap for overlap, _v in visitors)
+    for addr, raw in iter_chunks(h, overlap=most, chunk=chunk):
+        for overlap, visit in visitors:
+            visit(addr, raw, min(len(raw), chunk + overlap))
+
+
 def as_f32(raw):
     """bytes -> float32 view (trailing partial word dropped)."""
     return np.frombuffer(raw, dtype=np.float32, count=len(raw) // 4)

@@ -107,8 +107,8 @@ def compare_line(v, lay, ctx):
     return rows, bad, stale
 
 
-# player-object field -> (HUD key, allowed |memory - hud|). The HUD frame is read
-# before a ~30 s memory sweep, so counters that grow get generous slack; a moved
+# player-object field -> (HUD key, allowed |memory - hud|). The HUD frame can date
+# from early in a ~30 s memory sweep, so counters that grow get generous slack; a moved
 # offset reads garbage (or 0) and still fails by a mile.
 PLAYER_VS_HUD = {
     "level": ("level", lambda x: 2),

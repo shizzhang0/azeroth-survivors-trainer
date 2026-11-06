@@ -113,6 +113,43 @@ def dominant_run(frames):
     return max(groups, key=lambda g: (len(g), g[-1]["time"])) if groups else frames
 
 
+class HudScan:
+    """memscan.sweep visitor: every HUD frame in memory and where it sits, so
+    the HUD can ride along with another sweep (player.locate_ranked)."""
+
+    def __init__(self):
+        self.frames, self.spots = [], []
+
+    def visitor(self):
+        return HUD_SPAN, self
+
+    def __call__(self, addr, raw, end):
+        i = raw.find(HUD_MARK, 0, end)
+        while i >= 0:
+            got = parse_hud(raw[i:min(i + HUD_SPAN, end)])
+            if got:
+                self.frames.append(got[0])
+                self.spots.append((addr + i, got[0]))
+            i = raw.find(HUD_MARK, i + 1, end)
+
+    def pick(self, h, require=(), watch=None):
+        """The current run's newest frame among those found (see read_hud)."""
+        watch = HUD_WATCH if watch is None else watch
+        if watch > 0 and self.spots:
+            time.sleep(watch)
+            live = []
+            for addr, before in self.spots:
+                raw = memscan.read(h, addr, HUD_SPAN)
+                got = parse_hud(raw) if raw else []
+                if got and got[0] != before:
+                    live.append(got[0])
+            best = newest_hud(live, require)
+            if best:
+                return best
+        return (newest_hud(dominant_run(self.frames), require)
+                or newest_hud(self.frames, require))
+
+
 def read_hud(h, require=(), watch=None):
     """The current run's newest HUD frame: live numbers the game itself prints.
 
@@ -122,25 +159,6 @@ def read_hud(h, require=(), watch=None):
     `watch` seconds and take the newest frame among those that changed. If none
     changed (game paused), the run with the most frames in memory wins.
     """
-    watch = HUD_WATCH if watch is None else watch
-    frames, spots = [], []
-    for addr, raw in memscan.iter_chunks(h, overlap=HUD_SPAN):
-        i = raw.find(HUD_MARK)
-        while i >= 0:
-            got = parse_hud(raw[i:i + HUD_SPAN])
-            if got:
-                frames.append(got[0])
-                spots.append((addr + i, got[0]))
-            i = raw.find(HUD_MARK, i + 1)
-    if watch > 0 and spots:
-        time.sleep(watch)
-        live = []
-        for addr, before in spots:
-            raw = memscan.read(h, addr, HUD_SPAN)
-            got = parse_hud(raw) if raw else []
-            if got and got[0] != before:
-                live.append(got[0])
-        best = newest_hud(live, require)
-        if best:
-            return best
-    return newest_hud(dominant_run(frames), require) or newest_hud(frames, require)
+    scan = HudScan()
+    memscan.sweep(h, [scan.visitor()])
+    return scan.pick(h, require, watch)

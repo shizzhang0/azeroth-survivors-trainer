@@ -136,6 +136,96 @@ class IterChunksTest(unittest.TestCase):
         self.assertEqual(sizes, [SMALL_CHUNK + 16, 16])
 
 
+class SweepTest(unittest.TestCase):
+    def test_each_visitor_sees_what_iter_chunks_gave_it(self):
+        mem = FakeMemory()
+        for base, size in ((0x10000, 3 * SMALL_CHUNK + 100), (0x20000, SMALL_CHUNK - 8),
+                           (0x30000, 37)):
+            mem.add(base, size)
+            mem.put(base, os.urandom(size))
+        overlaps = (0, 8, game.HUD_SPAN, player.FP_OVERLAP)
+        seen = {o: [] for o in overlaps}
+        regions = mock.Mock(side_effect=mem._regions)
+        with mem.patch(), mock.patch.object(memscan, "regions", regions):
+            memscan.sweep(None, [(o, lambda a, raw, end, o=o: seen[o].append((a, raw[:end])))
+                                 for o in overlaps])
+            self.assertEqual(regions.call_count, 1)                   # one pass for all four
+            for o in overlaps:
+                self.assertEqual(seen[o], list(memscan.iter_chunks(None, overlap=o)), o)
+
+
+def two_sweep_locate(h):
+    """player.locate_ranked as it was up to v1118: a HUD sweep (game.read_hud,
+    no watch), then a fingerprint sweep. The reference for the merged one."""
+    frames = []
+    for addr, raw in memscan.iter_chunks(h, overlap=game.HUD_SPAN):
+        i = raw.find(game.HUD_MARK)
+        while i >= 0:
+            got = game.parse_hud(raw[i:i + game.HUD_SPAN])
+            if got:
+                frames.append(got[0])
+            i = raw.find(game.HUD_MARK, i + 1)
+    need = ("gold", "kills", "level")
+    info = game.newest_hud(game.dominant_run(frames), need) or game.newest_hud(frames, need)
+    hits, checked = {}, set()
+    for addr, raw in memscan.iter_chunks(h, overlap=player.FP_OVERLAP):
+        idx = memscan.match_fields(memscan.as_f32(raw), player.FINGERPRINT)
+        if not len(idx):
+            continue
+        lv = np.frombuffer(raw, dtype=np.int32, count=len(raw) // 4)[idx + player.LEVEL_K]
+        for i in idx[(lv >= 1) & (lv < 200)]:
+            a = addr + int(i) * 4
+            if a in checked:
+                continue
+            checked.add(a)
+            blob = memscan.read(h, a, player.OBJ_SIZE)
+            if not blob or len(blob) < player.OBJ_SIZE or not player.matches_hud(blob, info):
+                continue
+            if not any(abs(a - b) < 512 for b in hits):
+                hits[a] = player.hud_score(blob, info)
+    top = max(hits.values())
+    return sorted(a for a in hits if hits[a] == top), info, frames
+
+
+class OneSweepLocateTest(unittest.TestCase):
+    def test_finds_what_the_two_sweeps_found(self):
+        mem = FakeMemory()
+        heap = mem.add(0x100000, 16 * SMALL_CHUNK)
+        stale, decoy = heap + 0x40, heap + 2 * SMALL_CHUNK - 0x5F0   # its block straddles an edge
+        frozen, hero = heap + 5 * SMALL_CHUNK - 0x100, heap + 9 * SMALL_CHUNK + 0x30
+        mem.put(stale, player_object(kills=3, gold=1))
+        mem.put(decoy, player_object(level=1, gold=5600, kills=-2147372288, hp=0.0, maxhp=98.0))
+        mem.put(frozen, player_object())
+        mem.put(hero, player_object())
+        hud = mem.add(0x200000, 4 * SMALL_CHUNK)
+
+        def frame(t):
+            return (b'{"type":"hud","time":%.1f,"level":12,"hpMax":1200,"gold":5000,"kills":640}'
+                    % t)
+        mem.put(hud + 64, HUD_OLD)
+        mem.put(hud + SMALL_CHUNK - 20, frame(300.0))             # straddles a chunk edge
+        mem.put(hud + 2 * SMALL_CHUNK + 100, frame(310.0))        # in both sweeps' overlap
+        mem.put(hud + 3 * SMALL_CHUNK + 800, HUD_LIVE)            # past the HUD's overlap only
+        regions = mock.Mock(side_effect=mem._regions)
+        with mem.patch(), mock.patch.object(memscan, "regions", regions):
+            old_top, old_info, old_frames = two_sweep_locate(None)
+            self.assertEqual(regions.call_count, 2)
+            top, info = player.locate_ranked(None)
+            self.assertEqual(regions.call_count, 3)                    # one sweep, not two
+            scan, fp = game.HudScan(), player.FingerprintScan()
+            memscan.sweep(None, [scan.visitor(), fp.visitor()])
+        self.assertEqual((top, info), (old_top, old_info))
+        self.assertEqual(top, [frozen, hero])                         # tied: pick_live decides
+        self.assertEqual(info["time"], 321.5)
+        self.assertEqual(scan.frames, old_frames)                     # repeats and all
+
+    def test_no_hud_still_fails_after_one_sweep(self):
+        mem = FakeMemory()
+        mem.put(mem.add(0x100000, 4 * SMALL_CHUNK), player_object())
+        with mem.patch(), self.assertRaisesRegex(SystemExit, "no HUD"):
+            player.locate_ranked(None)
+
+
 class ReadTest(unittest.TestCase):
     """memscan.read on this very process: real ReadProcessMemory, no game."""
 

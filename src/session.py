@@ -182,7 +182,7 @@ class Session:
 
     # --- connect ------------------------------------------------------------
     def locate(self):
-        """Find the game and the live player object (two memory sweeps, 30-90 s)."""
+        """Find the game and the live player object (one memory sweep)."""
         self.close()
         pid = game.find_pid()
         if not pid:
@@ -586,8 +586,8 @@ class Session:
     def relocate(self):
         """Find the hero again after it moved, keeping every lock.
 
-        Scores candidates against the last values we read (one sweep, ~half the
-        time of locate()); falls back to the HUD if that finds nothing, e.g. the
+        Scores candidates against the last values we read (one sweep, no HUD
+        needed); falls back to the HUD if that finds nothing, e.g. the
         run ended and the numbers started over. Returns (old base, new base).
         """
         if self.h is None:
