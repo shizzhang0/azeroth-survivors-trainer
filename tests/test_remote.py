@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import agent             # noqa: E402
 import addon_mailbox as mb  # noqa: E402
 import memscan           # noqa: E402
+import preset            # noqa: E402
 import session              # noqa: E402
 from session import FIELDS   # noqa: E402
 
@@ -262,6 +263,9 @@ class FakeSession:
     def heal(self):
         return 500.0
 
+    def locate(self):
+        return 0x1000
+
     def relocate(self):
         self.lost = False
         self.relocated.set()
@@ -293,6 +297,103 @@ class AgentLifecycleTest(unittest.TestCase):
             a.game_gone()
         self.assertTrue(s.closed)
         self.assertEqual((a.pid, a.box, a.session, a.located_ok), (None, None, None, False))
+
+
+class PresetTest(unittest.TestCase):
+    def test_labels_are_unique(self):
+        labels = [f[2] for f in FIELDS]
+        self.assertEqual(len(labels), len(set(labels)))
+
+    def test_reads_like_the_panel(self):
+        got = preset.parse_text("""
+            # comment
+            伤害 = +100%
+            幸运=1000          # inline comment
+            暴击：50
+            持续伤害层数 = 4
+            player.gold = 99999
+        """)
+        self.assertEqual(got[0], ("stat", "dmg", 2.0))
+        self.assertAlmostEqual(got[1][2], 10.0)
+        self.assertAlmostEqual(got[2][2], 0.5)
+        self.assertEqual(got[3], ("stat", "dots", 3.0))
+        self.assertEqual(got[4], ("player", "gold", 99999))
+
+    def test_bad_lines_name_their_line(self):
+        for text, msg in [("伤害 100", "第 1 行.*名字 = 数值"),
+                          ("\n攻击力 = 5", "第 2 行.*没有叫“攻击力”"),
+                          ("金币数量 = 1.5", "第 1 行.*金币数量"),
+                          ("伤害 = 10\n伤害 = 20", "第 2 行.*第 1 行已经写过")]:
+            with self.assertRaisesRegex(preset.PresetError, msg):
+                preset.parse_text(text)
+
+    def test_template_lists_everything_and_does_nothing(self):
+        t = preset.template()
+        self.assertEqual(preset.parse_text(t), [])
+        labels = {f[2] for f in FIELDS}
+        uncommented = "\n".join(line[2:] if line[2:].split(" =")[0] in labels else line
+                                 for line in t.splitlines())     # every field row, as is
+        self.assertEqual(preset.parse_text(uncommented), [])     # "伤害 =" left empty: skipped
+        for f in FIELDS:
+            self.assertIn(f"# {f[2]} = ", t)
+
+    def test_locks_what_it_can_and_writes_the_rest(self):
+        s = FakeSession()
+        lines = preset.apply(s, preset.parse_text("幸运 = 500\n等级 = 30\n宝箱价格 = 1"))
+        self.assertEqual(set(s.pins), {("stat", "luck"), ("player", "chest")})
+        self.assertIn(("player", "level", 30.0), s.writes)
+        self.assertEqual(len(lines), 3)
+
+    def test_one_failure_does_not_stop_the_rest(self):
+        s = FakeSession()
+        real_pin = s.pin
+
+        def pin(kind, name, value):
+            if name == "thorns" and value is not None:
+                raise session.SessionError("no slot")
+            return real_pin(kind, name, value)
+        s.pin = pin
+        lines = preset.apply(s, preset.parse_text("荆棘 = 40\n幸运 = 500"))
+        self.assertIn("failed", lines[0])
+        self.assertIn(("stat", "luck"), s.pins)
+
+    def test_agent_applies_it_after_each_locate(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, preset.FILENAME)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("幸运 = 1000\n")
+        made = []
+
+        def factory():
+            made.append(FakeSession())
+            return made[-1]
+        a = agent.Agent(session_factory=factory, preset_path=path)
+        with mock.patch.object(agent, "log"):
+            for run in range(2):                         # a new run: a new session, again
+                a.start_locate()
+                for _ in range(100):
+                    if not a.locating:
+                        break
+                    threading.Event().wait(0.01)
+                self.assertAlmostEqual(made[run].pins[("stat", "luck")], 10.0)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("幸运 = oops\n")                 # a broken edit: nothing, no crash
+            a.start_locate()
+            for _ in range(100):
+                if not a.locating:
+                    break
+                threading.Event().wait(0.01)
+        self.assertEqual(made[-1].pins, {})
+
+    def test_missing_file_is_written_commented_out(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, preset.FILENAME)
+        self.assertEqual(preset.load(path), [])
+        self.assertTrue(preset.ensure_file(path))
+        self.assertFalse(preset.ensure_file(path))       # never overwrites yours
+        self.assertEqual(preset.load(path), [])
 
 
 class HandleTest(unittest.TestCase):
