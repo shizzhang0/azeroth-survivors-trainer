@@ -305,6 +305,33 @@ class AgentLifecycleTest(unittest.TestCase):
         self.assertTrue(s.closed)
         self.assertEqual((a.pid, a.box, a.session, a.located_ok), (None, None, None, False))
 
+    def test_loop_asks_the_handle_not_the_window_list(self):
+        # every 50 ms the loop used to walk all windows (game.find_pid)
+        class Stop(Exception):
+            pass
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 4:                     # waiting for the game again
+                raise Stop
+        running = [True, True, False]                 # the game closes on the third look
+        a = agent.Agent(session_factory=FakeSession)
+        with mock.patch.object(agent.game, "find_pid", side_effect=[1234, None]) as find_pid, \
+                mock.patch.object(memscan, "alive", side_effect=lambda h: running.pop(0)) as alive, \
+                mock.patch.object(memscan, "open_process", return_value=77), \
+                mock.patch.object(memscan.k32, "CloseHandle") as close, \
+                mock.patch.object(a, "attach", return_value=False), \
+                mock.patch.object(agent.time, "sleep", side_effect=sleep), \
+                mock.patch.object(agent, "log") as log:
+            with self.assertRaises(Stop):
+                a.run()
+        self.assertEqual(find_pid.call_count, 2)      # at the start, and after it closed
+        self.assertEqual([c.args[0] for c in alive.call_args_list], [77, 77, 77])
+        close.assert_called_once_with(77)
+        self.assertTrue(any("game closed" in c.args[0] for c in log.call_args_list))
+        self.assertEqual((a.h, a.pid), (None, None))
+
 
 class PresetTest(unittest.TestCase):
     def test_labels_are_unique(self):

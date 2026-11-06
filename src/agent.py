@@ -289,14 +289,14 @@ class Agent:
     def run(self):
         next_snap = next_beat = 0.0
         while True:
-            pid = game.find_pid()
-            if not pid:
-                if self.pid is not None:
-                    self.game_gone()
-                time.sleep(WAIT_GAME)
-                continue
-            if pid != self.pid:
-                self.close_handle()
+            # one kernel call per tick; walking every window is for finding the game
+            if self.h is not None and not memscan.alive(self.h):
+                self.game_gone()
+            if self.h is None:
+                pid = game.find_pid()
+                if not pid:
+                    time.sleep(WAIT_GAME)
+                    continue
                 self.pid = pid
                 self.h = memscan.open_process(pid, write=True)
                 self.box = None

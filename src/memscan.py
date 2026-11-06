@@ -20,6 +20,9 @@ PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 PROCESS_VM_WRITE = 0x0020
 PROCESS_VM_OPERATION = 0x0008
+SYNCHRONIZE = 0x00100000            # lets alive() wait on the handle
+WAIT_OBJECT_0, WAIT_TIMEOUT = 0x0, 0x102
+STILL_ACTIVE = 259
 
 MEM_COMMIT = 0x1000
 MEM_IMAGE = 0x1000000
@@ -60,11 +63,15 @@ k32.WriteProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_vo
 k32.VirtualAllocEx.restype = ctypes.c_void_p
 k32.VirtualAllocEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_size_t,
                                wintypes.DWORD, wintypes.DWORD]
+k32.WaitForSingleObject.restype = wintypes.DWORD
+k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+k32.GetExitCodeProcess.restype = wintypes.BOOL
+k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
 MEM_COMMIT_RESERVE, PAGE_READWRITE = 0x3000, 0x04
 
 
 def open_process(pid, write=False):
-    access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+    access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE
     if write:
         access |= PROCESS_VM_WRITE | PROCESS_VM_OPERATION
     h = k32.OpenProcess(access, False, pid)
@@ -72,6 +79,16 @@ def open_process(pid, write=False):
         err = ctypes.get_last_error()
         raise OSError(err, f"OpenProcess({pid}) failed: {ctypes.FormatError(err)}")
     return h
+
+
+def alive(h):
+    """Is the process behind h still running? One kernel call, no window walk."""
+    r = k32.WaitForSingleObject(h, 0)
+    if r in (WAIT_TIMEOUT, WAIT_OBJECT_0):
+        return r == WAIT_TIMEOUT
+    # WAIT_FAILED: a handle opened without SYNCHRONIZE; the exit code still tells
+    code = wintypes.DWORD()
+    return bool(k32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == STILL_ACTIVE
 
 
 def regions(h, skip_image=True):

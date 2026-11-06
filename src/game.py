@@ -26,14 +26,16 @@ def utf8_console():
             pass            # None under pythonw, or not a stream we can switch
 
 
+u32 = ctypes.WinDLL("user32", use_last_error=True)
+_ENUM_CB = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+u32.EnumWindows.argtypes = [_ENUM_CB, wintypes.LPARAM]
+u32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+u32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+u32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+
+
 def find_pid():
     """Pid of the game: by window title first, then by executable name."""
-    u32 = ctypes.WinDLL("user32", use_last_error=True)
-    CB = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    u32.EnumWindows.argtypes = [CB, wintypes.LPARAM]
-    u32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-    u32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    u32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
     found = []
 
     def cb(hwnd, _l):
@@ -46,7 +48,7 @@ def find_pid():
             found.append(pid.value)
         return True
 
-    u32.EnumWindows(CB(cb), 0)
+    u32.EnumWindows(_ENUM_CB(cb), 0)
     if found:
         return found[0]
     procs = memscan.find_pids(EXE_NAME)

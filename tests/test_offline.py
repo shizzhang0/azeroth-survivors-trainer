@@ -11,6 +11,7 @@ import threading
 import io
 import os
 import struct
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -132,6 +133,26 @@ class IterChunksTest(unittest.TestCase):
         with mem.patch():
             sizes = [len(raw) for _a, raw in memscan.iter_chunks(None, overlap=64)]
         self.assertEqual(sizes, [SMALL_CHUNK + 16, 16])
+
+
+class AliveTest(unittest.TestCase):
+    """memscan.alive against a real child process (no game needed)."""
+
+    def test_running_then_exited(self):
+        p = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                             stdin=subprocess.PIPE)
+        self.addCleanup(p.kill)
+        h = memscan.open_process(p.pid)
+        self.addCleanup(memscan.k32.CloseHandle, h)
+        # a handle without SYNCHRONIZE can't be waited on: the exit code answers
+        bare = memscan.k32.OpenProcess(memscan.PROCESS_QUERY_INFORMATION, False, p.pid)
+        self.addCleanup(memscan.k32.CloseHandle, bare)
+        self.assertTrue(memscan.alive(h))
+        self.assertTrue(memscan.alive(bare))
+        p.stdin.close()
+        p.wait(10)
+        self.assertFalse(memscan.alive(h))
+        self.assertFalse(memscan.alive(bare))
 
 
 class HudTest(unittest.TestCase):
