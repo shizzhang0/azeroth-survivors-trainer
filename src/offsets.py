@@ -129,6 +129,10 @@ PLAYER = {
                                  # 20 -> 31 on opening one; wrote 1, HUD showed 1
 }
 
+# Values the game itself never goes past. v1118: the level cap is 120 (seen in
+# game); a higher level could send its experience-table lookup out of bounds.
+PLAYER_LIMITS = {"level": (1, 120)}
+
 # Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.
 # Empty on v1118. After an update, put a field here until it is re-identified.
 PLAYER_UNVERIFIED = set()

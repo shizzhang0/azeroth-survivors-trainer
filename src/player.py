@@ -24,7 +24,7 @@ import numpy as np
 
 import game
 import memscan
-from offsets import (GAME_VERSION, PLAYER, PLAYER_FINGERPRINT, PLAYER_UNVERIFIED,
+from offsets import (GAME_VERSION, PLAYER, PLAYER_FINGERPRINT, PLAYER_LIMITS, PLAYER_UNVERIFIED,
                      STAT_RANGES, player_stat)
 
 # Writable run-state fields, in write order (maxhp before anything that reads it).
@@ -201,6 +201,10 @@ def main():
     blocked = [n for n, _v in writes if n in PLAYER_UNVERIFIED]
     if blocked:
         sys.exit(f"{', '.join(blocked)}: offset not verified on {GAME_VERSION}, refusing to write")
+    for name, value in writes:
+        lo, hi = PLAYER_LIMITS.get(name, (value, value))
+        if not lo <= value <= hi:
+            sys.exit(f"{name} must be {lo}-{hi} (the game's own limit), not {value}")
     pid = args.pid or game.find_pid()
     if not pid:
         sys.exit("game window not found")
