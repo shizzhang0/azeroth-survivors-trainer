@@ -407,7 +407,7 @@ class AddonEndToEndTest(unittest.TestCase):
 
     def test_lua_units_agree_with_python(self):
         show_lua, parse_lua = self.g.AZSRemote_Show, self.g.AZSRemote_Parse
-        for unit in ("num", "int", "+int", "%", "%.1", "+%", "+%1", "haste"):
+        for unit in ("num", "int", "+int", "%", "%.1", "+%", "+%1", "haste", "dots"):
             for raw in (0.0, 0.2644, 0.322, 0.5, 0.877, 1.0, 1.147, 1.733, 2.254, 5, 10, 30.57, 447):
                 if unit in ("int", "+int") and raw != int(raw):
                     continue

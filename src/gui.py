@@ -59,14 +59,15 @@ class App:
         counts = {"stat": 0, "player": 0}
         last_group = None
         for kind, name, label, _fmt, lockable, unit, group in FIELDS:
-            frame = stat if kind == "stat" else state
-            counts[kind] += 1
-            if kind == "stat" and group != last_group:      # 角色 / 冒险属性, as in the game
+            col = "player" if kind == "player" else "stat"   # effects sit with the stats
+            frame = state if col == "player" else stat
+            counts[col] += 1
+            if col == "stat" and group != last_group:       # 角色 / 冒险属性, as in the game
                 ttk.Label(frame, text=group, foreground="#9a6700").grid(
-                    row=counts[kind], column=0, sticky="w", pady=(6, 0))
-                counts[kind] += 1
+                    row=counts[col], column=0, sticky="w", pady=(6, 0))
+                counts[col] += 1
             last_group = group
-            self.add_row(frame, counts[kind], kind, name, label, unit, lockable)
+            self.add_row(frame, counts[col], kind, name, label, unit, lockable)
 
         ttk.Button(state, text="回满血", command=self.heal).grid(
             row=counts["player"] + 1, column=0, sticky="w", pady=(8, 0))

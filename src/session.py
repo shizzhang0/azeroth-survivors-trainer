@@ -12,11 +12,14 @@ import game
 import memscan
 import player
 import trainer
-from offsets import PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED, STAT, STAT_READONLY, STAT_TAIL
+from offsets import (DOTS_MAX_EXTRA, EFFECT_LIST, EFFECT_TAGS, PLAYER, PLAYER_STAT_BASE,
+                     PLAYER_UNVERIFIED, STAT, STAT_READONLY, STAT_TAIL)
 
 # (kind, name, label, struct format, lockable, unit, group)
 #   kind  stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
 #         player — real run state: a single write sticks until the game changes it
+#         effect — summed from the gear/card effect list each time (荆棘): we
+#                  change the first entry of its tag so the sum is the value
 #   label, order and group follow the game's own character pane (角色 box, then
 #   冒险属性), so a row here reads like the line it changes there.
 #   unit  how the pane shows the raw value; the panels show and take input that way:
@@ -27,6 +30,7 @@ from offsets import PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED, STAT, STAT_READ
 #     +%     v * 100, signed (幸运 +1000%, 增益强度 +44%, 持续伤害急速 +77%)
 #     +%1    (v - 1) * 100  (伤害 +73%, 范围 +15%, 速度 +32%, 经验值 / 金币 +0%)
 #     haste  (1 - v) * 100  (急速 +12%: the stat is a cooldown multiplier)
+#     dots   min(v, 3) + 1  (持续伤害层数: the stat holds the extra stacks)
 FIELDS = [
     ("stat", "hp", "生命值", "<f", True, "num", "角色"),
     ("stat", "dmg", "伤害", "<f", True, "+%1", "角色"),
@@ -41,10 +45,13 @@ FIELDS = [
     ("stat", "reg", "回复", "<f", True, "num", "角色"),
     ("stat", "pick", "拾取（码）", "<f", True, "num", "角色"),
     ("stat", "heal", "击杀治疗", "<f", True, "num", "冒险属性"),
+    ("effect", "thorns", "荆棘", "<f", True, "%", "冒险属性"),
+    ("stat", "lives", "生命数", "<i", True, "int", "冒险属性"),
     ("stat", "xp", "经验值", "<f", True, "+%1", "冒险属性"),
     ("stat", "gold", "金币", "<f", True, "+%1", "冒险属性"),
     ("stat", "luck", "幸运", "<f", True, "+%", "冒险属性"),
     ("stat", "bp", "增益强度", "<f", True, "+%", "冒险属性"),
+    ("stat", "dots", "持续伤害层数", "<i", True, "dots", "冒险属性"),
     ("stat", "doth", "持续伤害急速", "<f", True, "+%", "冒险属性"),
     ("player", "gold", "金币数量", "<i", True, "int", "状态"),
     ("player", "hp", "当前血量", "<f", True, "num", "状态"),
@@ -58,6 +65,7 @@ FIELDS = [
 STAT_ALL = {**STAT, **STAT_TAIL}
 assert all(n in STAT_ALL and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
 assert all(n in PLAYER for k, n, *_ in FIELDS if k == "player")
+assert all(n in EFFECT_TAGS for k, n, *_ in FIELDS if k == "effect")
 SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock, *_ in FIELDS}
 UNIT = {(k, n): unit for k, n, _l, _f, _c, unit, _g in FIELDS}
 
@@ -65,6 +73,8 @@ UNIT = {(k, n): unit for k, n, _l, _f, _c, unit, _g in FIELDS}
 # --- game units <-> raw values (mirrored in addon/AZSRemote/AZSRemote.lua) -----
 def to_game(unit, v):
     """Raw value -> the number the game's pane shows."""
+    if unit == "dots":
+        return min(max(v, 0), DOTS_MAX_EXTRA) + 1
     if unit in ("%", "%.1", "+%"):
         return v * 100.0
     if unit == "+%1":
@@ -76,6 +86,8 @@ def to_game(unit, v):
 
 def from_game(unit, x):
     """A number typed the way the pane shows it -> the raw value to write."""
+    if unit == "dots":
+        return float(min(max(x - 1, 0), DOTS_MAX_EXTRA))
     if unit in ("%", "%.1", "+%"):
         return x / 100.0
     if unit == "+%1":
@@ -112,7 +124,9 @@ class SessionError(Exception):
 
 
 def offset(kind, name):
-    """Byte offset of a field from the player-object base."""
+    """Byte offset of a field from the player-object base (not for effects)."""
+    if kind == "effect":
+        raise ValueError(f"{name} has no fixed offset: it lives in the effect list")
     return PLAYER_STAT_BASE + STAT_ALL[name] if kind == "stat" else PLAYER[name][0]
 
 
@@ -220,10 +234,40 @@ class Session:
         blob = memscan.read(self.h, self.base, player.OBJ_SIZE)
         if not blob or len(blob) < player.OBJ_SIZE or not self.alive(blob):
             return None
-        vals = {(k, n): struct.unpack_from(fmt, blob, offset(k, n))[0]
+        vals = {(k, n): (self._effect_total(n) if k == "effect"
+                         else struct.unpack_from(fmt, blob, offset(k, n))[0])
                 for (k, n), (_l, fmt, _c) in SPEC.items()}
         self._last_vals = vals
         return vals
+
+    # --- effect list (荆棘): summed per tag by the game each time ---------------
+    def _effect_entries(self, name):
+        """[(address of the f32 value, value)] for every entry with name's tag."""
+        raw = memscan.read(self.h, self.base + EFFECT_LIST[0], 8)
+        rawn = memscan.read(self.h, self.base + EFFECT_LIST[1], 8)
+        if not raw or not rawn:
+            return []
+        ptr, n = struct.unpack("<Q", raw)[0], struct.unpack("<Q", rawn)[0]
+        if not ptr or not 0 < n < 1024:
+            return []
+        data = memscan.read(self.h, ptr, 8 * n)
+        if not data or len(data) < 8 * n:
+            return []
+        tag = EFFECT_TAGS[name]
+        return [(ptr + 8 * i + 4, struct.unpack_from("<f", data, 8 * i + 4)[0])
+                for i in range(n) if data[8 * i] == tag]
+
+    def _effect_total(self, name):
+        return sum(v for _a, v in self._effect_entries(name))
+
+    def _write_effect(self, name, value):
+        entries = self._effect_entries(name)
+        if not entries:
+            label = SPEC[("effect", name)][0]
+            raise SessionError(f"{label}：现在没有任何来源可改，先拿到一件带{label}的装备或卡")
+        rest = sum(v for _a, v in entries[1:])
+        if not memscan.write(self.h, entries[0][0], struct.pack("<f", value - rest)):
+            raise SessionError(f"写入 {name} 失败（游戏已退出？）")
 
     def _follow_live(self):
         """Switch to a tied look-alike if ours stays still while that one moves."""
@@ -246,8 +290,10 @@ class Session:
         if not self.connected:
             raise SessionError("还没定位到游戏")
         v = coerce(kind, name, value)
-        if not memscan.write(self.h, self.base + offset(kind, name),
-                             struct.pack(SPEC[(kind, name)][1], v)):
+        if kind == "effect":
+            self._write_effect(name, v)
+        elif not memscan.write(self.h, self.base + offset(kind, name),
+                               struct.pack(SPEC[(kind, name)][1], v)):
             raise SessionError(f"写入 {name} 失败（游戏已退出？）")
         return v
 
@@ -286,7 +332,13 @@ class Session:
         with self._lock:
             pins = list(self._pins.items())
         for (k, n), data in pins:
-            memscan.write(self.h, self.base + offset(k, n), data)
+            if k == "effect":
+                try:
+                    self._write_effect(n, struct.unpack("<f", data)[0])
+                except SessionError:
+                    pass                    # the source went away (gear swapped): skip
+            else:
+                memscan.write(self.h, self.base + offset(k, n), data)
         return 0
 
     def _run(self):
