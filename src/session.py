@@ -13,7 +13,8 @@ import memscan
 import player
 import trainer
 from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_PAGE_ENTRIES, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
-                     ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED,
+                     ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_LIMITS, PLAYER_STAT_BASE,
+                     PLAYER_UNVERIFIED,
                      STAT, STAT_READONLY, STAT_TAIL)
 
 # (kind, name, label, struct format, lockable, unit, group)
@@ -149,6 +150,9 @@ def coerce(kind, name, value):
         v = int(v)
         if not -2**31 <= v < 2**31:
             raise ValueError("out of range")
+    lo_hi = PLAYER_LIMITS.get(name) if kind == "player" else None
+    if lo_hi and not lo_hi[0] <= v <= lo_hi[1]:
+        raise ValueError(f"must be {lo_hi[0]}-{lo_hi[1]}")
     return v
 
 

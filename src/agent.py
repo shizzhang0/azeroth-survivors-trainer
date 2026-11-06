@@ -8,7 +8,11 @@ carries out what you click in the in-game panel (AZS button or /azs) and
 reports values back. When the game moves the hero mid-run it finds it again by
 itself and keeps the locks. When the game closes it waits for the next launch;
 closing this window is what stops it (and every lock).
+
+At the start of every run it also applies AZS-preset.txt (next to the game's
+exe; --preset to use another file): see preset.py.
 """
+import argparse
 import ctypes
 import filecmp
 import os
@@ -20,6 +24,7 @@ import time
 import game
 import addon_mailbox as mb
 import memscan
+import preset
 from scan_stores import DEFAULT_EXE
 from session import FIELDS, Session, SessionError, show
 
@@ -89,8 +94,9 @@ def handle(session, ready, cmd, arg1, arg2):
 
 
 class Agent:
-    def __init__(self, session_factory=Session):
+    def __init__(self, session_factory=Session, preset_path=None):
         self.session_factory = session_factory
+        self.preset_path = preset_path      # None: no preset
         self.session = None
         self.box = None
         self.h = None
@@ -119,6 +125,7 @@ class Agent:
                 if session is self.session:
                     self.located_ok = True
                     log(f"hero located at 0x{base:X} — panel is live")
+                    self.apply_preset(session)
             except SessionError as e:
                 log(f"could not locate the hero: {e} (click 重新定位 in the panel to retry)")
             except Exception as e:      # noqa: BLE001 — keep the agent alive
@@ -128,6 +135,19 @@ class Agent:
                     self.locating = False
 
         threading.Thread(target=work, daemon=True).start()
+
+    def apply_preset(self, session):
+        """A new run's hero was found: lock what the preset file asks for. The
+        file is read now, so an edit counts from the next run."""
+        if not self.preset_path:
+            return
+        try:
+            entries = preset.load(self.preset_path)
+        except (OSError, preset.PresetError) as e:
+            log(f"preset {self.preset_path}: {e} — nothing applied")
+            return
+        for line in preset.apply(session, entries):
+            log(f"preset: {line}")
 
     def start_relocate(self):
         """Find the hero again (it moved, or 重新定位 was clicked), keeping locks."""
@@ -319,12 +339,26 @@ def single_instance():
 
 
 def main():
+    ap = argparse.ArgumentParser(description="AZS in-game controller agent")
+    ap.add_argument("--preset", default=preset.DEFAULT_PATH, metavar="FILE",
+                    help=f"values to lock at the start of every run (default: {preset.DEFAULT_PATH})")
+    ap.add_argument("--no-preset", action="store_true", help="don't apply any preset")
+    args = ap.parse_args()
     if not single_instance():
         sys.exit("another agent is already running")
     if install_addon():
         log(f"installed/updated the addon in {ADDON_DST} — it loads from the next run")
+    path = None if args.no_preset else args.preset
+    if path:
+        if path == preset.DEFAULT_PATH and preset.ensure_file(path):
+            log(f"wrote an empty preset to {path} — edit it to lock values every run")
+        try:
+            n = len(preset.load(path))
+            log(f"preset {path}: {n} value(s) applied at the start of every run")
+        except (OSError, preset.PresetError) as e:
+            log(f"preset {path}: {e} — fix the file; it is read again at every run")
     log("agent started. In a run, click the AZS button (or /azs). Close this window to stop.")
-    agent = Agent()
+    agent = Agent(preset_path=path)
     try:
         agent.run()
     except KeyboardInterrupt:

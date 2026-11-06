@@ -406,6 +406,13 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(self.s.write("player", "chest", "1"), 1)
         self.assertEqual(self.s.read()[("player", "chest")], 1)
 
+    def test_level_stays_within_the_games_cap(self):
+        self.assertEqual(self.s.write("player", "level", 120), 120)
+        for bad in (121, 999, 0):
+            with self.assertRaisesRegex(ValueError, "1-120"):
+                self.s.write("player", "level", bad)
+        self.assertEqual(self.s.read()[("player", "level")], 120)
+
     def test_lock_rewrites_after_the_game_recomputes(self):
         self.s.pin("stat", "luck", "5")
         self.s.tick()
