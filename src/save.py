@@ -302,6 +302,7 @@ class Save:
 
 
 def main():
+    game.utf8_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--file", default=SAVE, help="save file (default: %(default)s)")
     ap.add_argument("--exe", help="game exe, where the key is (default: AZS_EXE, "

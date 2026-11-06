@@ -59,8 +59,7 @@ def handle(session, ready, cmd, arg1, arg2):
         if cmd == mb.WRITE:
             return mb.OK, f"{label} = {show(unit, session.write(kind, name, arg2))}"
         if cmd == mb.LOCK:
-            v = session.pin(kind, name, arg2)
-            session.write(kind, name, v)      # take effect now, not at the next tick
+            v = session.pin(kind, name, arg2)     # writes it now, then keeps it there
             return mb.OK, f"lock {label} = {show(unit, v)}"
         if cmd == mb.UNLOCK:
             session.pin(kind, name, None)
@@ -268,14 +267,14 @@ class Agent:
     def run(self):
         next_snap = next_beat = 0.0
         while True:
-            pid = game.find_pid()
-            if not pid:
-                if self.pid is not None:
-                    self.game_gone()
-                time.sleep(WAIT_GAME)
-                continue
-            if pid != self.pid:
-                self.close_handle()
+            # one kernel call per tick; walking every window is for finding the game
+            if self.h is not None and not memscan.alive(self.h):
+                self.game_gone()
+            if self.h is None:
+                pid = game.find_pid()
+                if not pid:
+                    time.sleep(WAIT_GAME)
+                    continue
                 self.pid = pid
                 self.h = memscan.open_process(pid, write=True)
                 self.box = None
@@ -318,6 +317,7 @@ def single_instance():
 
 
 def main():
+    game.utf8_console()
     ap = argparse.ArgumentParser(description="AZS in-game controller agent")
     ap.add_argument("--preset", metavar="FILE",
                     help="values to lock at the start of every run; an empty template is "

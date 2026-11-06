@@ -7,6 +7,8 @@ when lupa is missing:
 
   uv run --no-project --with numpy --with lupa python -m unittest discover -s tests
 """
+import importlib
+import io
 import os
 import re
 import shutil
@@ -23,10 +25,15 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import agent             # noqa: E402
 import addon_mailbox as mb  # noqa: E402
+import game              # noqa: E402
 import memscan           # noqa: E402
 import preset            # noqa: E402
 import session              # noqa: E402
 from session import FIELDS   # noqa: E402
+
+# agent.main() does this before anything prints; these tests drive the agent
+# directly, and its log lines carry Chinese labels.
+game.utf8_console()
 
 LUA_FILE = os.path.join(ROOT, "addon", "AZSRemote", "AZSRemote.lua")
 
@@ -253,7 +260,7 @@ class FakeSession:
             self.pins.pop((kind, name), None)
             return None
         self.pins[(kind, name)] = float(value)
-        return float(value)
+        return self.write(kind, name, value)        # like Session.pin: in effect at once
 
     def write(self, kind, name, value):
         self.writes.append((kind, name, float(value)))
@@ -297,6 +304,33 @@ class AgentLifecycleTest(unittest.TestCase):
             a.game_gone()
         self.assertTrue(s.closed)
         self.assertEqual((a.pid, a.box, a.session, a.located_ok), (None, None, None, False))
+
+    def test_loop_asks_the_handle_not_the_window_list(self):
+        # every 50 ms the loop used to walk all windows (game.find_pid)
+        class Stop(Exception):
+            pass
+        sleeps = []
+
+        def sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 4:                     # waiting for the game again
+                raise Stop
+        running = [True, True, False]                 # the game closes on the third look
+        a = agent.Agent(session_factory=FakeSession)
+        with mock.patch.object(agent.game, "find_pid", side_effect=[1234, None]) as find_pid, \
+                mock.patch.object(memscan, "alive", side_effect=lambda h: running.pop(0)) as alive, \
+                mock.patch.object(memscan, "open_process", return_value=77), \
+                mock.patch.object(memscan.k32, "CloseHandle") as close, \
+                mock.patch.object(a, "attach", return_value=False), \
+                mock.patch.object(agent.time, "sleep", side_effect=sleep), \
+                mock.patch.object(agent, "log") as log:
+            with self.assertRaises(Stop):
+                a.run()
+        self.assertEqual(find_pid.call_count, 2)      # at the start, and after it closed
+        self.assertEqual([c.args[0] for c in alive.call_args_list], [77, 77, 77])
+        close.assert_called_once_with(77)
+        self.assertTrue(any("game closed" in c.args[0] for c in log.call_args_list))
+        self.assertEqual((a.h, a.pid), (None, None))
 
 
 class PresetTest(unittest.TestCase):
@@ -343,6 +377,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(set(s.pins), {("stat", "luck"), ("player", "chest")})
         self.assertIn(("player", "level", 30.0), s.writes)
         self.assertEqual(len(lines), 3)
+        self.assertEqual(len(s.writes), 3)                         # one write each
 
     def test_counters_and_gold_are_written_once_not_locked(self):
         # a locked banish count let a run banish its card pool empty (v1118)
@@ -414,6 +449,7 @@ class HandleTest(unittest.TestCase):
         self.assertEqual(agent.handle(s, False, mb.LOCK, luck, 5)[0], mb.NOT_READY)
         self.assertEqual(agent.handle(s, True, mb.LOCK, luck, 5)[0], mb.OK)
         self.assertEqual(s.pins, {("stat", "luck"): 5.0})
+        self.assertEqual(s.writes, [("stat", "luck", 5.0)])      # pin's own write, no second one
         self.assertEqual(agent.handle(s, True, mb.UNLOCK, luck, 0)[0], mb.OK)
         self.assertEqual(s.pins, {})
         self.assertEqual(agent.handle(s, True, mb.LOCK, 99, 5)[0], mb.BAD_INPUT)
@@ -421,6 +457,46 @@ class HandleTest(unittest.TestCase):
             self.assertEqual(agent.handle(s, True, mb.LOCK, level, 30)[0], mb.BAD_INPUT)
         self.assertEqual(agent.handle(s, True, mb.HEAL, 0, 0)[0], mb.OK)
         self.assertEqual(agent.handle(s, False, mb.RELOCATE, 0, 0)[0], mb.OK)
+
+
+class ConsoleTest(unittest.TestCase):
+    """stdout piped on a cp1252 machine: a Chinese log line used to end the agent."""
+
+    @staticmethod
+    def cp1252():
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+
+    def test_log_survives_a_cp1252_stdout(self):
+        out, err = self.cp1252(), self.cp1252()
+        with mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err):
+            with self.assertRaises(UnicodeEncodeError):
+                agent.log("panel: lock 幸运 = +500%")      # what the agent died of
+            game.utf8_console()
+            agent.log("panel: lock 幸运 = +500%")
+            sys.stderr.write("没找到游戏进程\n")
+            sys.stderr.flush()
+        self.assertIn("幸运 = +500%".encode("utf-8"), out.buffer.getvalue())
+        self.assertIn("没找到游戏进程".encode("utf-8"), err.buffer.getvalue())
+
+    def test_no_stream_at_all_is_fine(self):
+        with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", None):
+            game.utf8_console()                           # pythonw: nothing to switch
+
+    def test_every_tool_switches_before_anything_else(self):
+        class First(Exception):
+            pass
+        names = ["agent", "player", "trainer", "save", "verify_layout"]
+        try:
+            import tkinter  # noqa: F401
+            names.append("gui")
+        except ImportError:        # pragma: no cover
+            pass
+        for name in names:
+            module = importlib.import_module(name)
+            with mock.patch.object(game, "utf8_console", side_effect=First), \
+                    mock.patch.object(sys, "argv", [name + ".py"]):
+                with self.assertRaises(First, msg=name):
+                    module.main()
 
 
 WOW_STUB = r"""

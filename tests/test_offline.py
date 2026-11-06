@@ -3,6 +3,7 @@
   python -m unittest discover -s tests -v
 """
 import contextlib
+import ctypes
 import hashlib
 import hmac
 import shutil
@@ -11,6 +12,7 @@ import threading
 import io
 import os
 import struct
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -133,6 +135,149 @@ class IterChunksTest(unittest.TestCase):
         with mem.patch():
             sizes = [len(raw) for _a, raw in memscan.iter_chunks(None, overlap=64)]
         self.assertEqual(sizes, [SMALL_CHUNK + 16, 16])
+
+
+class SweepTest(unittest.TestCase):
+    def test_each_visitor_sees_what_iter_chunks_gave_it(self):
+        mem = FakeMemory()
+        for base, size in ((0x10000, 3 * SMALL_CHUNK + 100), (0x20000, SMALL_CHUNK - 8),
+                           (0x30000, 37)):
+            mem.add(base, size)
+            mem.put(base, os.urandom(size))
+        overlaps = (0, 8, game.HUD_SPAN, player.FP_OVERLAP)
+        seen = {o: [] for o in overlaps}
+        regions = mock.Mock(side_effect=mem._regions)
+        with mem.patch(), mock.patch.object(memscan, "regions", regions):
+            memscan.sweep(None, [(o, lambda a, raw, end, o=o: seen[o].append((a, raw[:end])))
+                                 for o in overlaps])
+            self.assertEqual(regions.call_count, 1)                   # one pass for all four
+            for o in overlaps:
+                self.assertEqual(seen[o], list(memscan.iter_chunks(None, overlap=o)), o)
+
+
+def two_sweep_locate(h):
+    """player.locate_ranked as it was up to v1118: a HUD sweep (game.read_hud,
+    no watch), then a fingerprint sweep. The reference for the merged one."""
+    frames = []
+    for addr, raw in memscan.iter_chunks(h, overlap=game.HUD_SPAN):
+        i = raw.find(game.HUD_MARK)
+        while i >= 0:
+            got = game.parse_hud(raw[i:i + game.HUD_SPAN])
+            if got:
+                frames.append(got[0])
+            i = raw.find(game.HUD_MARK, i + 1)
+    need = ("gold", "kills", "level")
+    info = game.newest_hud(game.dominant_run(frames), need) or game.newest_hud(frames, need)
+    hits, checked = {}, set()
+    for addr, raw in memscan.iter_chunks(h, overlap=player.FP_OVERLAP):
+        idx = memscan.match_fields(memscan.as_f32(raw), player.FINGERPRINT)
+        if not len(idx):
+            continue
+        lv = np.frombuffer(raw, dtype=np.int32, count=len(raw) // 4)[idx + player.LEVEL_K]
+        for i in idx[(lv >= 1) & (lv < 200)]:
+            a = addr + int(i) * 4
+            if a in checked:
+                continue
+            checked.add(a)
+            blob = memscan.read(h, a, player.OBJ_SIZE)
+            if not blob or len(blob) < player.OBJ_SIZE or not player.matches_hud(blob, info):
+                continue
+            if not any(abs(a - b) < 512 for b in hits):
+                hits[a] = player.hud_score(blob, info)
+    top = max(hits.values())
+    return sorted(a for a in hits if hits[a] == top), info, frames
+
+
+class OneSweepLocateTest(unittest.TestCase):
+    def test_finds_what_the_two_sweeps_found(self):
+        mem = FakeMemory()
+        heap = mem.add(0x100000, 16 * SMALL_CHUNK)
+        stale, decoy = heap + 0x40, heap + 2 * SMALL_CHUNK - 0x5F0   # its block straddles an edge
+        frozen, hero = heap + 5 * SMALL_CHUNK - 0x100, heap + 9 * SMALL_CHUNK + 0x30
+        mem.put(stale, player_object(kills=3, gold=1))
+        mem.put(decoy, player_object(level=1, gold=5600, kills=-2147372288, hp=0.0, maxhp=98.0))
+        mem.put(frozen, player_object())
+        mem.put(hero, player_object())
+        hud = mem.add(0x200000, 4 * SMALL_CHUNK)
+
+        def frame(t):
+            return (b'{"type":"hud","time":%.1f,"level":12,"hpMax":1200,"gold":5000,"kills":640}'
+                    % t)
+        mem.put(hud + 64, HUD_OLD)
+        mem.put(hud + SMALL_CHUNK - 20, frame(300.0))             # straddles a chunk edge
+        mem.put(hud + 2 * SMALL_CHUNK + 100, frame(310.0))        # in both sweeps' overlap
+        mem.put(hud + 3 * SMALL_CHUNK + 800, HUD_LIVE)            # past the HUD's overlap only
+        regions = mock.Mock(side_effect=mem._regions)
+        with mem.patch(), mock.patch.object(memscan, "regions", regions):
+            old_top, old_info, old_frames = two_sweep_locate(None)
+            self.assertEqual(regions.call_count, 2)
+            top, info = player.locate_ranked(None)
+            self.assertEqual(regions.call_count, 3)                    # one sweep, not two
+            scan, fp = game.HudScan(), player.FingerprintScan()
+            memscan.sweep(None, [scan.visitor(), fp.visitor()])
+        self.assertEqual((top, info), (old_top, old_info))
+        self.assertEqual(top, [frozen, hero])                         # tied: pick_live decides
+        self.assertEqual(info["time"], 321.5)
+        self.assertEqual(scan.frames, old_frames)                     # repeats and all
+
+    def test_no_hud_still_fails_after_one_sweep(self):
+        mem = FakeMemory()
+        mem.put(mem.add(0x100000, 4 * SMALL_CHUNK), player_object())
+        with mem.patch(), self.assertRaisesRegex(SystemExit, "no HUD"):
+            player.locate_ranked(None)
+
+
+class ReadTest(unittest.TestCase):
+    """memscan.read on this very process: real ReadProcessMemory, no game."""
+
+    def setUp(self):
+        self.h = memscan.open_process(os.getpid())
+        self.addCleanup(memscan.k32.CloseHandle, self.h)
+
+    @staticmethod
+    def at(buf):
+        return ctypes.addressof((ctypes.c_char * len(buf)).from_buffer(buf))
+
+    def test_small_read(self):
+        buf = bytearray(b"hello, world")
+        self.assertEqual(memscan.read(self.h, self.at(buf), len(buf)), b"hello, world")
+        self.assertIsNone(memscan.read(self.h, 0, 16))            # unmapped
+
+    def test_chunk_reads_reuse_one_buffer_and_return_copies(self):
+        size = memscan.SCRATCH_MIN + 4096
+        one, two = bytearray(os.urandom(size)), bytearray(os.urandom(size))
+        first = memscan.read(self.h, self.at(one), size)
+        scratch = ctypes.addressof(memscan._scratch.buf)
+        second = memscan.read(self.h, self.at(two), size)
+        self.assertEqual(ctypes.addressof(memscan._scratch.buf), scratch)
+        self.assertEqual((first, second), (bytes(one), bytes(two)))   # the first one intact
+
+    def test_iter_chunks_still_goes_through_read(self):
+        mem = FakeMemory()
+        mem.add(0x10000, 2 * SMALL_CHUNK)
+        with mem.patch(), mock.patch.object(memscan, "read", wraps=mem._read) as read:
+            list(memscan.iter_chunks(None))
+        self.assertEqual(read.call_count, 2)
+
+
+class AliveTest(unittest.TestCase):
+    """memscan.alive against a real child process (no game needed)."""
+
+    def test_running_then_exited(self):
+        p = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"],
+                             stdin=subprocess.PIPE)
+        self.addCleanup(p.kill)
+        h = memscan.open_process(p.pid)
+        self.addCleanup(memscan.k32.CloseHandle, h)
+        # a handle without SYNCHRONIZE can't be waited on: the exit code answers
+        bare = memscan.k32.OpenProcess(memscan.PROCESS_QUERY_INFORMATION, False, p.pid)
+        self.addCleanup(memscan.k32.CloseHandle, bare)
+        self.assertTrue(memscan.alive(h))
+        self.assertTrue(memscan.alive(bare))
+        p.stdin.close()
+        p.wait(10)
+        self.assertFalse(memscan.alive(h))
+        self.assertFalse(memscan.alive(bare))
 
 
 class HudTest(unittest.TestCase):
@@ -325,6 +470,36 @@ class VerifyLayoutTest(unittest.TestCase):
         self.assertEqual(hits["v0.2.0-1036"], [blk])
         self.assertEqual(hits["v0.2.0-977"], [])
 
+    def test_same_layouts_are_swept_once(self):
+        groups = verify_layout.distinct_layouts()
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0][0], ["v0.2.0-1118", "v0.2.0-1115", "v0.2.0-1039",
+                                        "v0.2.0-1036", "v0.2.0-1033"])
+        self.assertEqual(groups[1][0], ["v0.2.0-977"])
+        self.assertEqual(sum(len(n) for n, _l in groups), len(offsets.STAT_LAYOUTS))
+        line = dict(hp=1200.0, cm=2.0, arm=0.05, area=1.1, luck=0.3, gold=1.25)
+        ctx = np.frombuffer(stat_block(luck=0.3, gold=1.25, area=1.1, arm=0.05), dtype=np.float32)
+
+        def run(found):
+            out = io.StringIO()
+            with mock.patch.object(sys, "argv", ["verify_layout.py", "1"]), \
+                    mock.patch.object(memscan, "open_process", return_value=7), \
+                    mock.patch.object(memscan.k32, "CloseHandle"), \
+                    mock.patch.object(memscan, "floats_at", return_value=ctx), \
+                    mock.patch.object(verify_layout, "stat_lines", return_value={"t": line}), \
+                    mock.patch.object(verify_layout, "verify_player"), \
+                    mock.patch.object(verify_layout, "find_struct", return_value=found) as fs, \
+                    contextlib.redirect_stdout(out):
+                verify_layout.main()
+            return fs.call_count, out.getvalue()
+        sweeps, _text = run([])
+        self.assertEqual(sweeps, 2)                               # was one per version: 6
+        sweeps, text = run([0x1000])
+        self.assertEqual(sweeps, 1)
+        self.assertIn("layout that fits: v0.2.0-1118 / v0.2.0-1115 / v0.2.0-1039 / "
+                      "v0.2.0-1036 / v0.2.0-1033", text)
+        self.assertIn("VERDICT: offsets still valid", text)
+
     def test_stale_line_before_a_card_pick_is_not_a_moved_field(self):
         lay = offsets.STAT
         ctx = np.frombuffer(stat_block(luck=0.48, xp=1.69), dtype=np.float32)
@@ -421,6 +596,31 @@ class SessionTest(unittest.TestCase):
         self.mem.put(self.obj, player_object(gold=120))         # game recomputed: luck 0
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("stat", "luck")], 5.0)
+
+    def test_lock_takes_effect_at_once(self):
+        self.s.pin("stat", "luck", 5)                            # no tick yet
+        self.s.pin("player", "chest", 1)
+        v = self.s.read()
+        self.assertAlmostEqual(v[("stat", "luck")], 5.0)
+        self.assertEqual(v[("player", "chest")], 1)
+
+    def test_lock_that_cannot_write_keeps_the_old_one(self):
+        self.s.pin("stat", "luck", 3)
+        with mock.patch.object(memscan, "write", return_value=False):
+            with self.assertRaises(session.SessionError):
+                self.s.pin("stat", "luck", 5)
+            with self.assertRaises(session.SessionError):
+                self.s.pin("stat", "dmg", 2)
+        self.assertEqual(self.s.pinned(), {("stat", "luck")})
+        self.s.tick()
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 3.0)
+
+    def test_effect_lock_writes_once(self):
+        self._effect_list([(0x16, 0.3)], cap=4)
+        with mock.patch.object(self.s, "_write_effect", wraps=self.s._write_effect) as w:
+            self.s.pin("effect", "thorns", 0.5)
+        self.assertEqual(w.call_count, 1)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.5, places=5)
 
     def test_out_of_range_lock_does_not_kill_the_target(self):
         # luck=500 is outside STAT_RANGES; the liveness check must skip pinned fields
@@ -653,6 +853,44 @@ class SessionTest(unittest.TestCase):
         self.mem.put(heap + 4, struct.pack("<f", 0.3))           # gear recomputed
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
+
+    def test_effect_lock_writes_only_when_the_sum_moves(self):
+        heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)], cap=4)
+        self.s.pin("effect", "thorns", 0.77)
+        memscan.write.reset_mock()
+        for _ in range(3):
+            self.s.tick()
+        memscan.write.assert_not_called()                         # every 20 ms: nothing to do
+        self.mem.put(heap + 12, struct.pack("<f", 0.5))           # the talent changed
+        self.s.tick()
+        self.assertTrue(memscan.write.called)
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        rebuilt = self.mem.add(0x98000, 0x100)                    # a new list, ours not in it
+        self.mem.put(rebuilt, struct.pack("<B3xf", 0x16, 0.3))
+        self.mem.put(self.obj + offsets.EFFECT_CAP, struct.pack("<QQQ", 4, rebuilt, 1))
+        memscan.write.reset_mock()
+        self.s.tick()
+        self.assertEqual(self._list_len(), 2)                     # our entry again
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.77, places=5)
+        memscan.write.reset_mock()
+        self.s.tick()
+        memscan.write.assert_not_called()
+
+    def test_read_reads_each_list_once(self):
+        self._effect_list([(0x16, 0.3), (0x0e, 0.01)])
+        self._item_list([(0x07, 0.5), (0x12, 0.021)])
+        heads = {self.obj + offsets.EFFECT_LIST[0]: 0, self.obj + offsets.ITEM_LIST[0]: 0}
+        fake_read = memscan.read
+
+        def counting(h, addr, size):
+            if addr in heads:
+                heads[addr] += 1
+            return fake_read(h, addr, size)
+        with mock.patch.object(memscan, "read", side_effect=counting):
+            v = self.s.read()
+        self.assertAlmostEqual(v[("effect", "thorns")], 0.3, places=5)
+        self.assertAlmostEqual(v[("effect", "lifesteal")], 0.031, places=5)
+        self.assertEqual(list(heads.values()), [1, 1])            # was 2 for the talent list
 
     def _item_list(self, items):
         """Point the hero's item Vec at `items` [(definition kind, value)]."""

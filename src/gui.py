@@ -213,9 +213,10 @@ class App:
 
     def write(self, key):
         try:
-            v = self.session.write(*key, self.value_for(key))
             if self.rows[key]["lock"].get():
-                self.session.pin(*key, v)
+                v = self.session.pin(*key, self.value_for(key))     # writes it too
+            else:
+                v = self.session.write(*key, self.value_for(key))
             self.say(f"{SPEC[key][0]} → {show(UNIT[key], v)}")
         except (ValueError, SessionError) as e:
             self.say(str(e), error=True)
@@ -224,8 +225,7 @@ class App:
         row = self.rows[key]
         try:
             if row["lock"].get():
-                v = self.session.pin(*key, self.value_for(key))
-                self.session.write(*key, v)         # take effect now
+                v = self.session.pin(*key, self.value_for(key))     # writes it now
                 self.say(f"已锁定 {SPEC[key][0]} = {show(UNIT[key], v)}")
             else:
                 self.session.pin(*key, None)
@@ -492,6 +492,7 @@ class SavePanel:
 
 
 def main():
+    game.utf8_console()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)     # crisp text on scaled displays
     except (AttributeError, OSError):
