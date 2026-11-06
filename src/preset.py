@@ -84,7 +84,6 @@ def apply(session, entries):
         try:
             if lockable:
                 v = session.pin(kind, name, raw)
-                session.write(kind, name, v)
                 lines.append(f"lock {label} = {show(unit, v)}")
             else:
                 v = session.write(kind, name, raw)

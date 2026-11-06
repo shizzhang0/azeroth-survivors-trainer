@@ -5,8 +5,8 @@ whether the offsets we rely on still hold. Writes nothing.
 
   python verify_layout.py [pid]
 
-Known layouts live in offsets.STAT_LAYOUTS; the checker tries each (newest
-first) and reports which one fits.
+Known layouts live in offsets.STAT_LAYOUTS; the checker tries each distinct
+one (newest first) and reports every version that has the one that fits.
 """
 import re
 import sys
@@ -61,6 +61,15 @@ def struct_checks(v, lay):
     ]
 
 
+def distinct_layouts(layouts=LAYOUTS):
+    """[(version names, layout)], newest first. Versions with the same offsets
+    (1118 back to 1033) share one entry, and so one memory sweep."""
+    out = {}
+    for name, lay in layouts.items():
+        out.setdefault(tuple(sorted(lay.items())), ([], lay))[0].append(name)
+    return list(out.values())
+
+
 def find_struct(h, v, lay):
     """Start addresses of blocks matching the stats line under layout `lay`."""
     checks = struct_checks(v, lay)
@@ -98,8 +107,8 @@ def compare_line(v, lay, ctx):
     return rows, bad, stale
 
 
-# player-object field -> (HUD key, allowed |memory - hud|). The HUD frame is read
-# before a ~30 s memory sweep, so counters that grow get generous slack; a moved
+# player-object field -> (HUD key, allowed |memory - hud|). The HUD frame can date
+# from early in a ~30 s memory sweep, so counters that grow get generous slack; a moved
 # offset reads garbage (or 0) and still fails by a mile.
 PLAYER_VS_HUD = {
     "level": ("level", lambda x: 2),
@@ -151,6 +160,7 @@ def verify_player(h):
 
 
 def main():
+    game.utf8_console()
     pid = int(sys.argv[1]) if len(sys.argv) > 1 else game.find_pid()
     if not pid:
         sys.exit("game window not found")
@@ -164,10 +174,10 @@ def main():
 
     for text, v in lines.items():
         hit = None
-        for name, lay in LAYOUTS.items():
+        for names, lay in distinct_layouts():
             cands = find_struct(h, v, lay)
             if cands:
-                hit = (name, lay, cands)
+                hit = (" / ".join(names), lay, cands)
                 break
         if not hit:
             continue

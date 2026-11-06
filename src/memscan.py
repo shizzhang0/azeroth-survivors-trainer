@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import struct
 import sys
+import threading
 from ctypes import wintypes
 
 import numpy as np
@@ -20,6 +21,9 @@ PROCESS_QUERY_INFORMATION = 0x0400
 PROCESS_VM_READ = 0x0010
 PROCESS_VM_WRITE = 0x0020
 PROCESS_VM_OPERATION = 0x0008
+SYNCHRONIZE = 0x00100000            # lets alive() wait on the handle
+WAIT_OBJECT_0, WAIT_TIMEOUT = 0x0, 0x102
+STILL_ACTIVE = 259
 
 MEM_COMMIT = 0x1000
 MEM_IMAGE = 0x1000000
@@ -60,11 +64,15 @@ k32.WriteProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_vo
 k32.VirtualAllocEx.restype = ctypes.c_void_p
 k32.VirtualAllocEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_size_t,
                                wintypes.DWORD, wintypes.DWORD]
+k32.WaitForSingleObject.restype = wintypes.DWORD
+k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+k32.GetExitCodeProcess.restype = wintypes.BOOL
+k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
 MEM_COMMIT_RESERVE, PAGE_READWRITE = 0x3000, 0x04
 
 
 def open_process(pid, write=False):
-    access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+    access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | SYNCHRONIZE
     if write:
         access |= PROCESS_VM_WRITE | PROCESS_VM_OPERATION
     h = k32.OpenProcess(access, False, pid)
@@ -72,6 +80,16 @@ def open_process(pid, write=False):
         err = ctypes.get_last_error()
         raise OSError(err, f"OpenProcess({pid}) failed: {ctypes.FormatError(err)}")
     return h
+
+
+def alive(h):
+    """Is the process behind h still running? One kernel call, no window walk."""
+    r = k32.WaitForSingleObject(h, 0)
+    if r in (WAIT_TIMEOUT, WAIT_OBJECT_0):
+        return r == WAIT_TIMEOUT
+    # WAIT_FAILED: a handle opened without SYNCHRONIZE; the exit code still tells
+    code = wintypes.DWORD()
+    return bool(k32.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == STILL_ACTIVE
 
 
 def regions(h, skip_image=True):
@@ -112,6 +130,21 @@ def iter_chunks(h, overlap=0, chunk=None):
             off += chunk
 
 
+def sweep(h, visitors, chunk=None):
+    """One pass over memory for several scanners at once.
+
+    visitors: [(overlap, visit)]. visit(addr, raw, end) is called for every
+    chunk, and raw[:end] is exactly what iter_chunks(h, overlap) would have
+    yielded; raw itself may run on (another visitor wanted more overlap), so
+    a visitor looks no further than end. Reading is most of a sweep's time.
+    """
+    chunk = chunk or CHUNK
+    most = max(overlap for overlap, _v in visitors)
+    for addr, raw in iter_chunks(h, overlap=most, chunk=chunk):
+        for overlap, visit in visitors:
+            visit(addr, raw, min(len(raw), chunk + overlap))
+
+
 def as_f32(raw):
     """bytes -> float32 view (trailing partial word dropped)."""
     return np.frombuffer(raw, dtype=np.float32, count=len(raw) // 4)
@@ -140,13 +173,24 @@ def match_fields(arr, checks):
     return idx
 
 
+SCRATCH_MIN = 1 << 20      # reads this big are sweep chunks: they reuse a buffer
+_scratch = threading.local()   # one per thread: the agent can sweep on two at once
+
+
 def read(h, addr, size):
-    buf = ctypes.create_string_buffer(size)
+    if size >= SCRATCH_MIN:
+        # a fresh 16 MB buffer per chunk is zero-filled for nothing; the bytes
+        # returned are a copy, so reusing the buffer is safe
+        buf = getattr(_scratch, "buf", None)
+        if buf is None or ctypes.sizeof(buf) < size:
+            buf = _scratch.buf = ctypes.create_string_buffer(size)
+    else:
+        buf = ctypes.create_string_buffer(size)
     got = ctypes.c_size_t(0)
     if not k32.ReadProcessMemory(h, ctypes.c_void_p(addr), buf, size, ctypes.byref(got)):
         return None
     n = got.value
-    return buf.raw[:n] if n else None
+    return ctypes.string_at(buf, n) if n else None      # one copy (buf.raw[:n] made two)
 
 
 def write(h, addr, data):

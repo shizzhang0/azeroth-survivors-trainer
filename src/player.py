@@ -78,8 +78,8 @@ def hud_score(blob, info):
     matches_hud() is only a gate: its gold fallback is loose on purpose, so a
     stray block with a gold-like number can pass it (v1118: level 1, max hp 98,
     kills garbage, picked over the real hero because it sat at a lower
-    address). The HUD frame is read before a ~30 s sweep, so the run moves on
-    meanwhile — slack is generous, but a wrong block misses by a mile.
+    address). The HUD frame can date from early in a ~30 s sweep, so the run
+    moves on meanwhile — slack is generous, but a wrong block misses by a mile.
     """
     def near(field_value, key, slack):
         return key in info and abs(field_value - info[key]) <= slack(info[key])
@@ -132,35 +132,61 @@ def locate_ranked(h, info=None):
     tie is not rare; callers break it by watching which one moves.
 
     `info` stands in for the HUD frame (level/kills/gold/hpMax): pass the hero's
-    last known numbers to find it again after it moved, without the HUD sweep.
+    last known numbers to find it again after it moved, without the HUD.
+    Either way it is one memory sweep: the HUD frames are gathered in the same
+    pass as the fingerprint candidates, which are judged against it afterwards.
     """
+    found = FingerprintScan()
     if info is None:
+        hud = game.HudScan()
+        memscan.sweep(h, [hud.visitor(), found.visitor()])
         # a newer partial frame can carry gold but not kills: insist on a whole one
-        info = game.read_hud(h, require=("gold", "kills", "level"))
+        info = hud.pick(h, require=("gold", "kills", "level"))
         if not info:
             sys.exit("no HUD frame — is a run in progress?")
+    else:
+        memscan.sweep(h, [found.visitor()])
+    return rank(h, found.cands, info), info
 
-    hits, checked = {}, set()            # address -> HUD score
-    for addr, raw in memscan.iter_chunks(h, overlap=FP_OVERLAP):
-        idx = memscan.match_fields(memscan.as_f32(raw), FINGERPRINT)
+
+class FingerprintScan:
+    """memscan.sweep visitor: addresses whose stat block passes the fingerprint
+    and whose level is plausible, in sweep order. A chunk overlap can list one
+    twice; rank() skips repeats."""
+
+    def __init__(self):
+        self.cands = []
+
+    def visitor(self):
+        return FP_OVERLAP, self
+
+    def __call__(self, addr, raw, end):
+        view = memoryview(raw)[:end]
+        idx = memscan.match_fields(memscan.as_f32(view), FINGERPRINT)
         if not len(idx):
+            return
+        lv = np.frombuffer(view, dtype=np.int32, count=end // 4)[idx + LEVEL_K]
+        self.cands.extend(addr + int(i) * 4 for i in idx[(lv >= 1) & (lv < 200)])
+
+
+def rank(h, cands, info):
+    """Candidates that pass the HUD gate, tied on the best HUD score, lowest
+    address first. Each is read fresh: the sweep took a while."""
+    hits, checked = {}, set()            # address -> HUD score
+    for a in cands:
+        if a in checked:                # seen again in a chunk overlap
             continue
-        lv = np.frombuffer(raw, dtype=np.int32, count=len(raw) // 4)[idx + LEVEL_K]
-        for i in idx[(lv >= 1) & (lv < 200)]:
-            a = addr + int(i) * 4
-            if a in checked:            # seen again in a chunk overlap
-                continue
-            checked.add(a)
-            blob = memscan.read(h, a, OBJ_SIZE)
-            if not blob or len(blob) < OBJ_SIZE or not matches_hud(blob, info):
-                continue
-            if not any(abs(a - b) < 512 for b in hits):
-                hits[a] = hud_score(blob, info)
+        checked.add(a)
+        blob = memscan.read(h, a, OBJ_SIZE)
+        if not blob or len(blob) < OBJ_SIZE or not matches_hud(blob, info):
+            continue
+        if not any(abs(a - b) < 512 for b in hits):
+            hits[a] = hud_score(blob, info)
     if not hits:
         sys.exit("player object not found (run may be paused or just started)")
     # best agreement with the HUD wins; ties keep the lower address first
     top_score = max(hits.values())
-    return sorted(a for a in hits if hits[a] == top_score), info
+    return sorted(a for a in hits if hits[a] == top_score)
 
 
 def show(h, base):
@@ -189,6 +215,7 @@ def fmt_hud(info):
 
 
 def main():
+    game.utf8_console()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--pid", type=int)
     ap.add_argument("--show", action="store_true")
