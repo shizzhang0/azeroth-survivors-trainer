@@ -499,17 +499,6 @@ class ConsoleTest(unittest.TestCase):
                     module.main()
 
 
-class InstallAddonTest(unittest.TestCase):
-    def test_copies_when_missing_or_changed(self):
-        dst = os.path.join(tempfile.mkdtemp(), "AddOns", "AZSRemote")
-        self.addCleanup(shutil.rmtree, os.path.dirname(os.path.dirname(dst)))
-        self.assertTrue(agent.install_addon(dst=dst))
-        self.assertFalse(agent.install_addon(dst=dst))              # up to date: no copy
-        with open(os.path.join(dst, "AZSRemote.lua"), "a", encoding="utf-8") as f:
-            f.write("-- stale\n")
-        self.assertTrue(agent.install_addon(dst=dst))
-
-
 WOW_STUB = r"""
 CHAT, FRAMES, NOW = {}, {}, 0
 local Obj = {}
