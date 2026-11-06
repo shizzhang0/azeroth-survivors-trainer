@@ -12,8 +12,9 @@ import game
 import memscan
 import player
 import trainer
-from offsets import (DOTS_MAX_EXTRA, EFFECT_LIST, EFFECT_TAGS, PLAYER, PLAYER_STAT_BASE,
-                     PLAYER_UNVERIFIED, STAT, STAT_READONLY, STAT_TAIL)
+from offsets import (DOTS_MAX_EXTRA, EFFECT_LIST, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
+                     ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_STAT_BASE, PLAYER_UNVERIFIED,
+                     STAT, STAT_READONLY, STAT_TAIL)
 
 # (kind, name, label, struct format, lockable, unit, group)
 #   kind  stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
@@ -44,6 +45,7 @@ FIELDS = [
     ("stat", "spd", "速度", "<f", True, "+%1", "角色"),
     ("stat", "reg", "回复", "<f", True, "num", "角色"),
     ("stat", "pick", "拾取（码）", "<f", True, "num", "角色"),
+    ("effect", "lifesteal", "生命偷取（装备部分）", "<f", True, "%.1", "冒险属性"),
     ("stat", "heal", "击杀治疗", "<f", True, "num", "冒险属性"),
     ("effect", "thorns", "荆棘", "<f", True, "%", "冒险属性"),
     ("stat", "lives", "生命数", "<i", True, "int", "冒险属性"),
@@ -65,7 +67,7 @@ FIELDS = [
 STAT_ALL = {**STAT, **STAT_TAIL}
 assert all(n in STAT_ALL and n not in STAT_READONLY for k, n, *_ in FIELDS if k == "stat")
 assert all(n in PLAYER for k, n, *_ in FIELDS if k == "player")
-assert all(n in EFFECT_TAGS for k, n, *_ in FIELDS if k == "effect")
+assert all(n in EFFECT_SOURCES for k, n, *_ in FIELDS if k == "effect")
 SPEC = {(k, n): (lbl, fmt, lock) for k, n, lbl, fmt, lock, *_ in FIELDS}
 UNIT = {(k, n): unit for k, n, _l, _f, _c, unit, _g in FIELDS}
 
@@ -240,22 +242,36 @@ class Session:
         self._last_vals = vals
         return vals
 
-    # --- effect list (荆棘): summed per tag by the game each time ---------------
-    def _effect_entries(self, name):
-        """[(address of the f32 value, value)] for every entry with name's tag."""
-        raw = memscan.read(self.h, self.base + EFFECT_LIST[0], 8)
-        rawn = memscan.read(self.h, self.base + EFFECT_LIST[1], 8)
+    # --- summed stats (荆棘, 生命偷取): the game adds list entries each time -----
+    def _vec(self, field_offsets, stride):
+        """(pointer, raw bytes) of a Vec whose ptr/len live in the player object."""
+        raw = memscan.read(self.h, self.base + field_offsets[0], 8)
+        rawn = memscan.read(self.h, self.base + field_offsets[1], 8)
         if not raw or not rawn:
-            return []
+            return 0, b""
         ptr, n = struct.unpack("<Q", raw)[0], struct.unpack("<Q", rawn)[0]
         if not ptr or not 0 < n < 1024:
-            return []
-        data = memscan.read(self.h, ptr, 8 * n)
-        if not data or len(data) < 8 * n:
-            return []
-        tag = EFFECT_TAGS[name]
-        return [(ptr + 8 * i + 4, struct.unpack_from("<f", data, 8 * i + 4)[0])
-                for i in range(n) if data[8 * i] == tag]
+            return 0, b""
+        data = memscan.read(self.h, ptr, stride * n)
+        return (ptr, data) if data and len(data) == stride * n else (0, b"")
+
+    def _effect_entries(self, name):
+        """[(address of the f32 value, value)] for every list entry that feeds name."""
+        out = []
+        for source, tag in EFFECT_SOURCES[name]:
+            if source == "effect":
+                ptr, data = self._vec(EFFECT_LIST, 8)
+                out += [(ptr + 8 * i + 4, struct.unpack_from("<f", data, 8 * i + 4)[0])
+                        for i in range(len(data) // 8) if data[8 * i] == tag]
+            else:                                   # items: kind sits in the definition
+                ptr, data = self._vec(ITEM_LIST, ITEM_STRIDE)
+                for i in range(len(data) // ITEM_STRIDE):
+                    e = ITEM_STRIDE * i
+                    kind = memscan.read(self.h, struct.unpack_from("<Q", data, e)[0] + ITEM_DEF_KIND, 1)
+                    if kind and kind[0] == tag:
+                        out.append((ptr + e + ITEM_VALUE,
+                                    struct.unpack_from("<f", data, e + ITEM_VALUE)[0]))
+        return out
 
     def _effect_total(self, name):
         return sum(v for _a, v in self._effect_entries(name))

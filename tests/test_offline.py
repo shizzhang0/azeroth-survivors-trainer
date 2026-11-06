@@ -522,6 +522,36 @@ class SessionTest(unittest.TestCase):
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.9, places=5)
 
+    def _item_list(self, items):
+        """Point the hero's item Vec at `items` [(definition kind, value)]."""
+        heap = self.mem.add(0xA0000, 0x2000)
+        for i, (kind, value) in enumerate(items):
+            definition = heap + 0x1000 + 0x80 * i
+            self.mem.put(definition + offsets.ITEM_DEF_KIND, bytes([kind]))
+            entry = struct.pack("<QQf4x", definition, 0, value)
+            self.mem.put(heap + offsets.ITEM_STRIDE * i, entry)
+        self.mem.put(self.obj + offsets.ITEM_LIST[0], struct.pack("<Q", heap))
+        self.mem.put(self.obj + offsets.ITEM_LIST[1], struct.pack("<Q", len(items)))
+        return heap
+
+    def test_lifesteal_sums_effects_and_items(self):
+        # RVA 0x5F809D0: effect tag 0x0e + item kind 0x12 (+ class base, not ours)
+        self._effect_list([(0x16, 0.3), (0x0e, 0.01)])
+        heap = self._item_list([(0x07, 0.5), (0x12, 0.021)])     # a ring among other gear
+        self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.031, places=5)
+        self.s.write("effect", "lifesteal", 0.5)
+        self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.5, places=5)
+        other_item = struct.unpack("<f", self.mem._read(None, heap + offsets.ITEM_VALUE, 4))[0]
+        self.assertAlmostEqual(other_item, 0.5, places=5)               # kind 0x07 untouched
+        self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
+
+    def test_lifesteal_from_a_ring_alone(self):
+        self._effect_list([(0x16, 0.3)])
+        self._item_list([(0x12, 0.021)])
+        self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.021, places=5)
+        self.s.write("effect", "lifesteal", 0.25)
+        self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.25, places=5)
+
     def test_lives_and_dot_stacks(self):
         # v1118 stats-line code: lives at block +0x60, stacks shown = min([+0x48], 3) + 1
         self.s.write("stat", "lives", 3)
