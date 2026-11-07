@@ -6,14 +6,21 @@ Two layers (see docs/OFFSETS.md):
                     PLAYER_STAT_BASE
 """
 
-# Game build these offsets were last confirmed on.
-GAME_VERSION = "v0.2.0-1118"
+# Game build these offsets were last confirmed on. The updater calls 1127
+# "0.142.0"; both strings are in the exe.
+GAME_VERSION = "v0.2.0-1127"
 
 # --- stat block -------------------------------------------------------------
 # field -> byte offset. Names match the keys of the game's own stats line
 # ("hp=...;dmg=...;luck=..."), which verify_layout.py compares against.
 # Newest first: verify_layout.py tries them in this order.
 STAT_LAYOUTS = {
+    # 1127 (0.142.0): every field OK against a live run; the exe writes the block
+    # at the same +0x680 as 1118 (xp now from xmm13, a REX-prefixed movss).
+    "v0.2.0-1127": {
+        "hp": 0, "dmg": 4, "cd": 8, "crit": 12, "cm": 16, "spd": 20, "pick": 24,
+        "xp": 28, "arm": 32, "x36": 36, "reg": 40, "area": 44, "luck": 48, "gold": 52,
+    },
     # 1118: every field OK against a live run; the exe moved the block another
     # +0x18 (same store pattern), again invisible to us.
     "v0.2.0-1118": {
@@ -67,6 +74,7 @@ DOTS_MAX_EXTRA = 3          # the game caps extra DoT stacks at 3 (4 stacks show
 # cards don't touch it. Thorns = tag 0x16 (pane 荆棘 30% -> 77% with a marker).
 # v1118, 7 talents: capacity 8, so one spare slot; appending (tag 0x16, 0.5) and
 # bumping the length showed 荆棘 50% with no thorns talent at all.
+# v1127: read on a live run, same shape (capacity 8, 7 talent tags, sane values).
 EFFECT_LIST = (0xADC, 0xAE4)        # player-object offsets of the Vec ptr and len
 EFFECT_CAP = 0xAD4                  # ... and its capacity (Rust Vec: cap, ptr, len)
 # With no spare slot (no talent stats at all: capacity 0; or exactly 4 / 8 kinds)
@@ -83,6 +91,8 @@ ITEM_STRIDE, ITEM_DEF_KIND, ITEM_VALUE = 24, 0x44, 0x10
 # lists, so the panel shows that part; the pane adds the class base (圣骑士 0.6%).
 # v1118: a legendary 饮血者指环 read kind 0x12 / 0.03 (3.0%); writing 0.25 moved
 # the pane's 生命偷取 to 25% + class base and stayed.
+# v1127: read on a live run, three items; one (kind 0x09, 0.288) equals the
+# block's echo (+60 = 0.288), so the list and the tail still line up.
 EFFECT_SOURCES = {
     "thorns": (("effect", 0x16),),
     "lifesteal": (("effect", 0x0e), ("item", 0x12)),
@@ -116,6 +126,9 @@ PLAYER_STAT_BASE = 0x5F4    # player object + 0x5F4 = stat block start
 # field -> (byte offset from the player-object base, struct format)
 # v1118: every field below re-checked on a live run (HUD; banishes 3 -> 2 after one).
 # Found on v1115 (banishes / chest by diff), unchanged on v1118.
+# v1127: unchanged. verify_layout.py: level / gold / kills / rerolls / chest / hp
+# match the HUD; banishes read 90 after the preset wrote 100 at run start, so the
+# game is counting that slot down.
 PLAYER = {
     "level":    (0x58C, "<i"),
     "xp":       (0x590, "<i"),   # current experience, resets on level up
@@ -134,7 +147,7 @@ PLAYER = {
 PLAYER_LIMITS = {"level": (1, 120)}
 
 # Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.
-# Empty on v1118. After an update, put a field here until it is re-identified.
+# Empty on v1127. After an update, put a field here until it is re-identified.
 PLAYER_UNVERIFIED = set()
 
 # Stat fields used as the player-object fingerprint (all must be in range at once).

@@ -473,8 +473,8 @@ class VerifyLayoutTest(unittest.TestCase):
     def test_same_layouts_are_swept_once(self):
         groups = verify_layout.distinct_layouts()
         self.assertEqual(len(groups), 2)
-        self.assertEqual(groups[0][0], ["v0.2.0-1118", "v0.2.0-1115", "v0.2.0-1039",
-                                        "v0.2.0-1036", "v0.2.0-1033"])
+        self.assertEqual(groups[0][0], ["v0.2.0-1127", "v0.2.0-1118", "v0.2.0-1115",
+                                        "v0.2.0-1039", "v0.2.0-1036", "v0.2.0-1033"])
         self.assertEqual(groups[1][0], ["v0.2.0-977"])
         self.assertEqual(sum(len(n) for n, _l in groups), len(offsets.STAT_LAYOUTS))
         line = dict(hp=1200.0, cm=2.0, arm=0.05, area=1.1, luck=0.3, gold=1.25)
@@ -493,11 +493,11 @@ class VerifyLayoutTest(unittest.TestCase):
                 verify_layout.main()
             return fs.call_count, out.getvalue()
         sweeps, _text = run([])
-        self.assertEqual(sweeps, 2)                               # was one per version: 6
+        self.assertEqual(sweeps, 2)                               # was one per version: 7
         sweeps, text = run([0x1000])
         self.assertEqual(sweeps, 1)
-        self.assertIn("layout that fits: v0.2.0-1118 / v0.2.0-1115 / v0.2.0-1039 / "
-                      "v0.2.0-1036 / v0.2.0-1033", text)
+        self.assertIn("layout that fits: v0.2.0-1127 / v0.2.0-1118 / v0.2.0-1115 / "
+                      "v0.2.0-1039 / v0.2.0-1036 / v0.2.0-1033", text)
         self.assertIn("VERDICT: offsets still valid", text)
 
     def test_stale_line_before_a_card_pick_is_not_a_moved_field(self):
@@ -1130,6 +1130,18 @@ class ExeLookupTest(unittest.TestCase):
         scan_stores.remember_exe(self.exe, self.remembered)
         os.environ["AZS_EXE"] = r"D:\elsewhere\AzerothSurvivors.exe"
         self.assertEqual(scan_stores.game_exe(self.remembered), r"D:\elsewhere\AzerothSurvivors.exe")
+
+
+
+class ScanStoresTest(unittest.TestCase):
+    def test_movss_rsi_with_and_without_rex(self):
+        # v1127 stores xp from xmm13: F3 44 0F 11 AE 9C 06 00 00
+        for code in ("f30f11ae9c060000", "f3440f11ae9c060000", "f3460f11ae9c060000"):
+            self.assertEqual(scan_stores.movss_stores(bytes.fromhex(code)), [(0, 0x69C)], code)
+        for code in ("f3410f11ae9c060000",      # REX.B: [r14 + disp], not rsi
+                     "f3480f11ae9c060000",      # REX.W: not a plain movss store
+                     "f30f11ae9e060000"):       # unaligned displacement
+            self.assertEqual(scan_stores.movss_stores(bytes.fromhex(code)), [], code)
 
 
 if __name__ == "__main__":

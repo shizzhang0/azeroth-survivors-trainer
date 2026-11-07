@@ -2,9 +2,12 @@
 
   python scan_stores.py [path\\to\\AzerothSurvivors.exe]
 
-Pattern: F3 0F 11 <modrm> <disp32>
+Pattern: F3 [REX] 0F 11 <modrm> <disp32>
   F3 0F 11   movss m32, xmm
-  modrm      mod=10, rm=110 -> [rsi + disp32] (reg = xmm0..7)
+  REX        optional 40/42/44/46: R picks xmm8..15, X is unused here. Never B
+             (that turns rsi into r14) or W. v1127 stores xp from xmm13
+             (F3 44 0F 11 AE 9C 06 00 00), which the plain form missed.
+  modrm      mod=10, rm=110 -> [rsi + disp32]
   disp32     0x100..0x10000, 4-byte aligned
 The exe is argv[1], else game_exe(): the AZS_EXE environment variable, else the
 exe the GUI was pointed at once. The repo holds no install path.
@@ -16,7 +19,8 @@ import re
 import struct
 import sys
 
-MOVSS_RSI = re.compile(rb"(?=\xF3\x0F\x11[\x86\x8E\x96\x9E\xA6\xAE\xB6\xBE](.{4}))", re.S)
+MOVSS_RSI = re.compile(
+    rb"(?=\xF3[\x40\x42\x44\x46]?\x0F\x11[\x86\x8E\x96\x9E\xA6\xAE\xB6\xBE](.{4}))", re.S)
 DISP_MIN, DISP_MAX = 0x100, 0x10000
 
 
