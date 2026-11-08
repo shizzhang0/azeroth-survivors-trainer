@@ -7,7 +7,8 @@ addon's mailbox in memory, locates the hero, then carries out what you click in
 the in-game panel (AZS button or /azs) and reports values back. When the game
 moves the hero mid-run it finds it again by itself and keeps the locks. When
 the game closes it waits for the next launch; closing this window is what
-stops it (and every lock).
+stops it (and every lock). With --exit-with-game (AZS-Launcher.bat passes it)
+it quits instead, once the game it saw has closed.
 
 It needs no install path: the addon is copied into the game by
 AZS-Launcher.bat (see README). With --preset FILE it also applies that file at
@@ -72,9 +73,10 @@ def handle(session, ready, cmd, arg1, arg2):
 
 
 class Agent:
-    def __init__(self, session_factory=Session, preset_path=None):
+    def __init__(self, session_factory=Session, preset_path=None, exit_with_game=False):
         self.session_factory = session_factory
         self.preset_path = preset_path      # None: no preset
+        self.exit_with_game = exit_with_game    # quit when the game closes, not wait
         self.session = None
         self.box = None
         self.h = None
@@ -258,8 +260,12 @@ class Agent:
 
     # --- main loop ------------------------------------------------------------
     def game_gone(self):
-        """The game closed: drop everything tied to that process and wait again."""
-        log("game closed — waiting for it to start again (close this window to quit)")
+        """The game closed: drop everything tied to that process and wait again
+        (or, with exit_with_game, let run() return)."""
+        if self.exit_with_game:
+            log("game closed — exiting with it")
+        else:
+            log("game closed — waiting for it to start again (close this window to quit)")
         self.close_handle()
         self.pid, self.box, self.located_ok, self.locating = None, None, False, False
         self.searching, self.incompatible = False, None
@@ -270,6 +276,8 @@ class Agent:
             # one kernel call per tick; walking every window is for finding the game
             if self.h is not None and not memscan.alive(self.h):
                 self.game_gone()
+                if self.exit_with_game:
+                    return
             if self.h is None:
                 pid = game.find_pid()
                 if not pid:
@@ -323,6 +331,9 @@ def main():
                     help="values to lock at the start of every run; an empty template is "
                          "written if FILE doesn't exist")
     ap.add_argument("--no-preset", action="store_true", help="don't apply any preset")
+    ap.add_argument("--exit-with-game", action="store_true",
+                    help="quit once the game closes instead of waiting for the next launch "
+                         "(AZS-Launcher.bat passes this)")
     args = ap.parse_args()
     if not single_instance():
         sys.exit("another agent is already running")
@@ -336,7 +347,7 @@ def main():
         except (OSError, preset.PresetError) as e:
             log(f"preset {path}: {e} — fix the file; it is read again at every run")
     log("agent started. In a run, click the AZS button (or /azs). Close this window to stop.")
-    agent = Agent(preset_path=path)
+    agent = Agent(preset_path=path, exit_with_game=args.exit_with_game)
     try:
         agent.run()
     except KeyboardInterrupt:

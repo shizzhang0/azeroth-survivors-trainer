@@ -332,6 +332,24 @@ class AgentLifecycleTest(unittest.TestCase):
         self.assertTrue(any("game closed" in c.args[0] for c in log.call_args_list))
         self.assertEqual((a.h, a.pid), (None, None))
 
+    def test_exit_with_game_returns_once_the_game_closes(self):
+        # started by AZS-Launcher.bat: wait for the game, then quit when it closes
+        sleeps = []
+        running = [True, False]                        # the game closes on the second look
+        a = agent.Agent(session_factory=FakeSession, exit_with_game=True)
+        with mock.patch.object(agent.game, "find_pid", side_effect=[None, None, 1234]) as find_pid,                 mock.patch.object(memscan, "alive", side_effect=lambda h: running.pop(0)),                 mock.patch.object(memscan, "open_process", return_value=77),                 mock.patch.object(memscan.k32, "CloseHandle") as close,                 mock.patch.object(a, "attach", return_value=False),                 mock.patch.object(agent.time, "sleep", side_effect=sleeps.append),                 mock.patch.object(agent, "log") as log:
+            a.run()                                    # returns instead of waiting again
+        self.assertEqual(find_pid.call_count, 3)       # waited for the game before it opened
+        close.assert_called_once_with(77)
+        self.assertTrue(any("exiting" in c.args[0] for c in log.call_args_list))
+        self.assertEqual((a.h, a.pid), (None, None))
+
+    def test_main_passes_exit_with_game(self):
+        for argv, want in ((["agent.py"], False), (["agent.py", "--exit-with-game"], True)):
+            with mock.patch.object(sys, "argv", argv),                     mock.patch.object(agent, "single_instance", return_value=True),                     mock.patch.object(agent.Agent, "run"),                     mock.patch.object(agent.Agent, "close_handle"),                     mock.patch.object(agent, "log"),                     mock.patch.object(agent.game, "utf8_console"),                     mock.patch.object(agent, "Agent", wraps=agent.Agent) as made:
+                agent.main()
+            self.assertEqual(made.call_args.kwargs["exit_with_game"], want, argv)
+
 
 class PresetTest(unittest.TestCase):
     def test_labels_are_unique(self):

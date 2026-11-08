@@ -67,7 +67,8 @@ uv run --no-project --with numpy python src/gui.py
 3. 状态显示“定位中…”约 30～60 秒，变绿色“已就绪”后：属性按游戏的写法填数（如伤害 `100` = +100%）按回车或勾“锁”；状态字段点“写”，能锁的也可以勾“锁”。
    下面有“回满血”“全部解锁”“重新定位”。
 4. 角色在内存里换了位置时，后台自动重新找到它，锁定自动接上（面板短暂变黄）。
-5. 游戏关闭后后台继续等，下次开游戏自动连上；关掉 `remote.bat` 窗口才真正退出，所有锁定随之停止。
+5. 游戏关闭时：用启动器开的后台跟着退出，窗口自动关掉；单独双击 `remote.bat` 开的后台继续等，下次开游戏自动连上，
+   关掉它的窗口才真正退出。两种情况下所有锁定都随后台停止。
 
 **`AZS-Launcher.bat`（一次双击：同步插件、开后台、开游戏）**：在游戏目录（`AzerothSurvivors.exe` 旁边）放这个文件，把 `TRAINER=` 改成你的仓库路径。
 仓库里不写任何安装路径：插件装到哪、预设文件在哪，都由它按自己所在的目录给出。
@@ -79,11 +80,14 @@ set "TRAINER=C:\path\to\azeroth-survivors-trainer"
 if not exist "%TRAINER%\remote.bat" (echo Trainer repo not found: %TRAINER% & pause & exit /b 1)
 robocopy "%TRAINER%\addon\AZSRemote" "%~dp0benilla-config\AddOns\AZSRemote" /NJH /NJS /NFL /NDL >nul
 if errorlevel 8 (echo Could not copy the addon into the game folder & pause)
-start "AZS remote" /d "%TRAINER%" cmd /c remote.bat --preset "%~dp0AZS-preset.txt"
+start "AZS remote" /d "%TRAINER%" cmd /c remote.bat --preset "%~dp0AZS-preset.txt" --exit-with-game
 start "" /d "%~dp0" "%~dp0AzerothSurvivors.exe"
 ```
 
-后台已经在运行时再双击，新窗口会提示 `another agent is already running`，按任意键关掉即可。
+`--exit-with-game` 让后台在游戏关闭后退出（游戏开起来之前它会一直等，不会提前退）；去掉它就和单独开 `remote.bat` 一样一直在后台等。
+
+后台已经在运行时再双击，新窗口会提示 `another agent is already running`，按任意键关掉即可；这时管事的是原来那个后台，
+它是怎么启动的就按哪种方式退出。
 
 **每局自动锁定常用数值（预设）**：第一次用启动器开后台时，会在游戏目录（`AZS-Launcher.bat` 旁边）写一个 `AZS-preset.txt`，列出全部属性，默认都注释掉。
 删掉行首的 `#`、在 `=` 后面按面板写法填数（如 `伤害 = 100`、`幸运 = 1000`、`宝箱价格 = 1`），保存即可：
