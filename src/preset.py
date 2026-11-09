@@ -15,7 +15,6 @@ run, so an edit takes effect from the next run without restarting the agent.
 """
 import os
 
-import cardpick
 from session import FIELDS, SessionError, coerce, parse, show
 
 FILENAME = "AZS-preset.txt"
@@ -30,18 +29,6 @@ for _kind, _name, *_ in FIELDS:
     if sum(1 for f in FIELDS if f[1] == _name) == 1:
         _BY_NAME[_name] = (_kind, _name)
 _SPEC = {(f[0], f[1]): f for f in FIELDS}
-
-
-CARD_TEMPLATE = [
-    "",
-    "# --- 自动选卡（要用 AZS-Launcher.bat 开游戏）---",
-    "# 写了名单就自动选：越靠前越优先，用 > 隔开；写稀有度（普通 优秀 精良 史诗 传说）表示这个稀有度及以上的任意一张。",
-    "# 同一项有几张都符合时选更稀有的。名字照卡上写（后台窗口会把每手牌列出来，可以照抄）。",
-    "# 只在游戏窗口在最前面时按键（1 2 3 选卡、R 重抽）；每手牌都重新读这个文件，改完马上生效。",
-    "# 技能卡 = 神圣愤怒 > 传说 > 审判",
-    "# 装备卡 = 天选者印记 > 史诗",
-    "# 都没有时 = 停下              # 停下（留给你选）/ 重抽（只用免费次数）/ 稀有度最高 / 第一张，可以用 > 连着写",
-]
 
 
 class PresetError(ValueError):
@@ -61,8 +48,6 @@ def parse_text(text):
                 break
         else:
             raise PresetError(f"第 {no} 行：要写成“名字 = 数值”：{line}")
-        if key in cardpick.KEYS:
-            continue                    # 技能卡 / 装备卡 / 都没有时: cardpick.py reads those
         if not val:
             continue                    # "伤害 =" with nothing after it: left as is
         field = _BY_NAME.get(key)
@@ -129,7 +114,6 @@ def template():
         if not lockable:
             hint += "（只在开局写一次）"
         rows.append(f"# {label} = {' ' * max(1, 14 - 2 * len(label))}# {hint}")
-    rows += CARD_TEMPLATE
     return "\n".join(rows) + "\n"
 
 

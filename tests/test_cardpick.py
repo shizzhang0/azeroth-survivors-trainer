@@ -11,7 +11,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import cardpick          # noqa: E402
-import preset            # noqa: E402
 from cardpick import Rules, decide, parse_text   # noqa: E402
 
 # Two hands as v1127 printed them (trimmed to the fields we use).
@@ -39,7 +38,7 @@ def cards(*specs, why="levelup", rerolls=1, cost=0):
 class RulesTest(unittest.TestCase):
     def test_reads_lists_and_fallback(self):
         r = parse_text("""
-            伤害 = 100                  # not ours: ignored here
+            # comment
             技能卡 = 神圣愤怒 > 传说 >审判
             装备卡：天选者印记，史诗、迅击戒指
             都没有时 = 重抽 > 稀有度最高   # comment
@@ -50,31 +49,39 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(r.active)
 
     def test_nothing_written_is_off_and_stops(self):
-        for text in ("", "伤害 = 100", "技能卡 =\n装备卡 = "):
+        for text in ("", "# 技能卡 = 审判", "技能卡 =\n装备卡 = "):
             r = parse_text(text)
             self.assertFalse(r.active)
             self.assertEqual(r.fallback, ("停下",))
 
     def test_bad_lines_name_their_line(self):
         for text, msg in [("都没有时 = 随便", "第 1 行.*随便"),
+                          ("\n伤害 = 100", "第 2 行.*没有叫“伤害”"),
+                          ("技能卡 审判", "第 1 行.*技能卡 = 名单"),
                           ("技能卡 = 审判\n\n技能卡 = 奉献", "第 3 行.*第 1 行已经写过")]:
             with self.assertRaisesRegex(cardpick.RuleError, msg):
                 parse_text(text)
 
-    def test_preset_leaves_card_lines_alone(self):
-        got = preset.parse_text("伤害 = 100\n技能卡 = 审判 > 传说\n都没有时 = 重抽")
-        self.assertEqual(got, [("stat", "dmg", 2.0)])
-
-    def test_template_examples_are_off_until_uncommented_and_valid_after(self):
-        t = preset.template()
-        self.assertEqual(preset.parse_text(t), [])
+    def test_template_is_off_until_uncommented_and_valid_after(self):
+        t = cardpick.template()
         self.assertFalse(parse_text(t).active)
-        on = "\n".join(line[2:] if line.startswith("# " + k) else line
-                       for line in t.splitlines() for k in [next(
-                           (k for k in cardpick.KEYS if line.startswith("# " + k)), "\0")])
+        on = "\n".join(line[2:] if any(line.startswith("# " + k) for k in cardpick.KEYS)
+                       else line for line in t.splitlines())
         r = parse_text(on)
-        self.assertTrue(r.active and r.skill and r.gear)
-        self.assertEqual(preset.parse_text(on), [])
+        self.assertTrue(r.skill and r.gear)
+        self.assertEqual(r.fallback, ("停下",))
+
+    def test_template_written_once(self):
+        d = tempfile.mkdtemp()
+        try:
+            path = os.path.join(d, cardpick.FILENAME)
+            self.assertTrue(cardpick.ensure_file(path))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("技能卡 = 审判\n")
+            self.assertFalse(cardpick.ensure_file(path))       # never overwrites a list
+            self.assertEqual(cardpick.load(path).skill, ["审判"])
+        finally:
+            shutil.rmtree(d)
 
 
 class DecideTest(unittest.TestCase):
@@ -238,7 +245,7 @@ class PickerTest(unittest.TestCase):
         self.assertEqual(self.keys.taps, [cardpick.SCAN_REROLL])
 
     def test_lists_but_leaves_hands_without_rules(self):
-        self.set_rules("伤害 = 100\n")
+        self.set_rules("# 技能卡 = 圣盾术\n")
         self.deal(LEVELUP)
         self.step(cardpick.SETTLE)
         self.assertEqual(self.keys.taps, [])
@@ -288,6 +295,61 @@ class PickerTest(unittest.TestCase):
             self.emit(line)
         self.step(cardpick.SETTLE)
         self.assertEqual(self.keys.taps, [])
+
+
+class ProgramTest(unittest.TestCase):
+    """The loop in cardpick.main: follows the game's life, picks in between."""
+
+    def make(self, pids):
+        self.now = 0.0
+        self.pids = list(pids)          # what find_pid returns, look by look
+        self.live = set()
+        self.said = []
+
+        def find_pid():
+            pid = self.pids.pop(0) if self.pids else None
+            if pid:
+                self.live.add(pid)
+            return pid
+
+        watch = cardpick.GameWatch(find_pid, lambda pid: pid, lambda h: h in self.live,
+                                   clock=lambda: self.now)
+        polled = []
+
+        class Picker:
+            def poll(_self, pid):
+                polled.append(pid)
+                if sum(1 for x in polled if x) == 3:
+                    self.live.clear()       # the game closes a few polls after it showed up
+
+        def sleep(dt):
+            self.now += dt
+            if self.now > 60:
+                raise TimeoutError("run() never returned")
+        return watch, Picker(), polled, sleep
+
+    def test_exit_with_game_waits_for_the_game_then_leaves_with_it(self):
+        watch, picker, polled, sleep = self.make([None, 4321])
+        cardpick.run(picker, watch, self.said.append, exit_with_game=True, sleep=sleep)
+        self.assertIn(4321, polled)
+        self.assertEqual(polled[0], None)                       # waited, didn't quit early
+        self.assertTrue(any("exiting with it" in s for s in self.said))
+
+    def test_without_exit_with_game_it_keeps_waiting(self):
+        watch, picker, polled, sleep = self.make([4321])
+        with self.assertRaises(TimeoutError):
+            cardpick.run(picker, watch, self.said.append, exit_with_game=False, sleep=sleep)
+        self.assertTrue(any("waiting for it to start again" in s for s in self.said))
+
+    def test_a_crashing_poll_does_not_end_the_program(self):
+        watch, _picker, _polled, sleep = self.make([None])
+
+        class Bad:
+            def poll(self, pid):
+                raise KeyError("boom")
+        with self.assertRaises(TimeoutError):
+            cardpick.run(Bad(), watch, self.said.append, sleep=sleep)
+        self.assertTrue(any("KeyError" in s for s in self.said))
 
 
 if __name__ == "__main__":
