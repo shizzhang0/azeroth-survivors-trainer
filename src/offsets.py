@@ -96,7 +96,21 @@ ITEM_STRIDE, ITEM_DEF_KIND, ITEM_VALUE = 24, 0x44, 0x10
 EFFECT_SOURCES = {
     "thorns": (("effect", 0x16),),
     "lifesteal": (("effect", 0x0e), ("item", 0x12)),
+    "luck": (("effect", 0x0c),),        # backs the luck stat lock: STAT_BACKING
 }
+
+# Stats whose lock also goes into the talent list, not only into the stat block.
+#
+# The game rebuilds the stat block on every level-up and every card pick, and in
+# the same frame deals the next hand of a stacked level-up. A stat-block lock
+# writes luck back ~15 ms later (v1127, timeline 2026-11-09: hands dealt 13-18 ms
+# after a pick read 普普普 / 优优优 with luck locked at +1000%; the first hand of
+# each level-up, 300 ms after the rebuild, read 传史史). An entry in the talent
+# list is part of what the rebuild sums, so luck never drops to 0 at that moment.
+# Tags found 2026-11-09 (v1127) by appending (tag, 3.0) and diffing a rebuild:
+# 0x08 范围 +3, 0x09 拾取 x4, 0x0a 经验值 +3, 0x0b 金币 +3, 0x0c 幸运 +3 (0 -> 3),
+# 0x0d 回响 +3, 0x0f 击杀治疗 +3.
+STAT_BACKING = {"luck"}
 
 # Never written by the tools: x36 holds 0.6. v1118: markers 0.07 and 3.0 left the
 # pane's 生命偷取 at 0.6%, so despite the match it is not lifesteal. Meaning unknown.

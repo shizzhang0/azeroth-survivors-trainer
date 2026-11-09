@@ -649,7 +649,7 @@ class SessionTest(unittest.TestCase):
             self.s.read()
         self.assertEqual(self.s.base, twin)
         self.assertEqual(self.s.alternates, [self.obj])
-        self.assertTrue(self.s.events and "switched" in self.s.events[0])
+        self.assertTrue(any("switched" in e for e in self.s.events))
         self.assertIn(("stat", "luck"), self.s.pinned())
 
     def _stop_thread(self):
@@ -737,6 +737,50 @@ class SessionTest(unittest.TestCase):
         self.s.pin("effect", "thorns", None)                      # unlock: counted out
         self.assertEqual(self._list_len(), 2)
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
+
+    def test_luck_lock_also_goes_into_the_talent_list(self):
+        # v1127: the rebuild after a card pick deals the next hand in the same frame;
+        # only an entry the rebuild sums (tag 0x0c) is there in time
+        heap = self._effect_list([(0x05, 0.1), (0x0c, 0.2)], cap=4)
+        self.s.pin("stat", "luck", 10)
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 10.0)    # the stat, at once
+        self.assertEqual(self._list_len(), 3)
+        tag, value = self._entry(heap, 2)
+        self.assertEqual(tag, 0x0c)
+        self.assertAlmostEqual(value, 9.8, places=5)              # with the talent's 0.2: 10
+        self.assertAlmostEqual(self._entry(heap, 1)[1], 0.2, places=5)   # talent untouched
+        self.s.pin("stat", "luck", 5)                              # re-lock: same entry
+        self.assertEqual(self._list_len(), 3)
+        self.assertAlmostEqual(self._entry(heap, 2)[1], 4.8, places=5)
+        self.s.pin("stat", "luck", None)                           # unlock: counted out
+        self.assertEqual(self._list_len(), 2)
+
+    def test_luck_backing_comes_back_after_the_list_is_rebuilt(self):
+        self._effect_list([(0x05, 0.1)], cap=4)
+        self.s.pin("stat", "luck", 10)
+        rebuilt = self.mem.add(0x98000, 0x100)                    # a new list, ours not in it
+        self.mem.put(rebuilt, struct.pack("<B3xf", 0x05, 0.1))
+        self.mem.put(self.obj + offsets.EFFECT_CAP, struct.pack("<QQQ", 4, rebuilt, 1))
+        self.s.tick()
+        self.assertEqual(self._list_len(), 2)
+        self.assertEqual(self._entry(rebuilt, 1)[0], 0x0c)
+
+    def test_luck_lock_holds_even_without_a_list_slot(self):
+        no_page = mock.patch.object(memscan, "alloc", return_value=None)
+        no_page.start()
+        self.addCleanup(no_page.stop)
+        self._effect_list([(0x05, 0.1)])                           # full, can't move it
+        self.s.pin("stat", "luck", 10)                             # no error: stat lock only
+        self.assertIn(("stat", "luck"), self.s.pinned())
+        self.assertAlmostEqual(self.s.read()[("stat", "luck")], 10.0)
+        self.assertEqual(self._list_len(), 1)
+        self.assertTrue(any("not backed" in e for e in self.s.events))
+
+    def test_other_stat_locks_stay_out_of_the_list(self):
+        self._effect_list([(0x05, 0.1)], cap=4)
+        self.s.pin("stat", "dmg", 3)
+        self.s.tick()
+        self.assertEqual(self._list_len(), 1)
 
     def test_thorns_without_any_source_when_there_is_a_slot(self):
         self._effect_list([(0x05, 0.1)], cap=4)
