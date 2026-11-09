@@ -12,9 +12,7 @@ it quits instead, once the game it saw has closed.
 
 It needs no install path: the addon is copied into the game by
 AZS-Launcher.bat (see README). With --preset FILE it also applies that file at
-the start of every run: see preset.py. With --game-log FILE (the game's
-output, which AZS-Launcher.bat saves there) it also picks cards by the
-技能卡 / 装备卡 lines of that preset: see cardpick.py.
+the start of every run: see preset.py.
 """
 import argparse
 import ctypes
@@ -24,7 +22,6 @@ import time
 
 import game
 import addon_mailbox as mb
-import cardpick
 import memscan
 import preset
 from session import FIELDS, Session, SessionError, show
@@ -319,24 +316,6 @@ class Agent:
             self.h = None
 
 
-def start_card_picker(agent, game_log, preset_path):
-    """Pick cards on a thread of its own: the agent's memory sweeps take
-    seconds, and a hand shouldn't wait for them."""
-    try:
-        rules = cardpick.load(preset_path)
-    except (OSError, cardpick.RuleError) as e:
-        log(f"cards: {preset_path}: {e} — fix the file; it is read again at every hand")
-    else:
-        if rules.active:
-            log(f"cards: auto-pick on — 技能卡 {rules.skill or '（不选）'}, "
-                f"装备卡 {rules.gear or '（不选）'}, 都没有时 {list(rules.fallback)}")
-        else:
-            log("cards: no 技能卡 / 装备卡 list in the preset — hands are only listed here")
-    picker = cardpick.CardPicker(game_log, preset_path, log)
-    picker.start(lambda: agent.pid)
-    return picker
-
-
 def single_instance():
     """Hold a named mutex; False if another agent already runs."""
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -352,9 +331,6 @@ def main():
                     help="values to lock at the start of every run; an empty template is "
                          "written if FILE doesn't exist")
     ap.add_argument("--no-preset", action="store_true", help="don't apply any preset")
-    ap.add_argument("--game-log", metavar="FILE",
-                    help="the game's standard output (AZS-Launcher.bat saves it there): "
-                         "pick cards by the preset's 技能卡 / 装备卡 lines")
     ap.add_argument("--exit-with-game", action="store_true",
                     help="quit once the game closes instead of waiting for the next launch "
                          "(AZS-Launcher.bat passes this)")
@@ -372,8 +348,6 @@ def main():
             log(f"preset {path}: {e} — fix the file; it is read again at every run")
     log("agent started. In a run, click the AZS button (or /azs). Close this window to stop.")
     agent = Agent(preset_path=path, exit_with_game=args.exit_with_game)
-    if args.game_log and path:
-        start_card_picker(agent, args.game_log, path)
     try:
         agent.run()
     except KeyboardInterrupt:

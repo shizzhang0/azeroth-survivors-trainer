@@ -1,5 +1,11 @@
 """Auto-pick level-up (spell) and treasure (ring / trinket / amulet) cards.
 
+  cards.bat --cards AZS-cards.txt --game-log AZS-game-out.txt [--exit-with-game]
+
+A program of its own (cards.bat in the repo root): it needs neither the
+addon nor the agent, only the game's output and a file of priority lists.
+AZS-Launcher.bat runs it next to remote.bat in one window.
+
 The game prints every hand it deals on its standard output, one line each:
 
     rogue: {"type":"choices","offer":7,"why":"cache","rerolls":2,"rerollCost":0,
@@ -8,7 +14,7 @@ The game prints every hand it deals on its standard output, one line each:
 and `rogue: {"type":"resume"}` when the card screen closes. Nothing keeps the
 hand in memory in a readable form (the one copy found there was a stale
 offer 1), so AZS-Launcher.bat starts the game with stdout going to a file and
-the agent follows that file (LogTail). Rules come from the preset file:
+this program follows that file (LogTail). Rules come from AZS-cards.txt:
 
     技能卡 = 神圣愤怒 > 传说 > 审判        升级时的法术卡，越靠前越优先
     装备卡 = 天选者印记 > 史诗              宝箱 / 首领给的戒指、饰品、项链
@@ -25,10 +31,11 @@ minimized window are ignored (v1127), and a key pressed into the wrong window
 would land somewhere else. If the screen doesn't move on after a key, the
 picker tries twice more and then leaves that hand alone.
 """
+import argparse
 import ctypes
 import json
 import os
-import threading
+import sys
 import time
 from ctypes import wintypes
 
@@ -44,6 +51,8 @@ SETTLE = 0.5            # s after a hand appears before the first key (the deal 
 RETRY = 2.0             # s to wait for the screen to move on before pressing again
 TRIES = 3
 POLL = 0.05
+WAIT_GAME = 2.0         # s between looks for the game window while it isn't running
+FILENAME = "AZS-cards.txt"
 
 # scan codes: 1 2 3 4 and R (the game's hint: "1 2 3 picks a card · R rerolls")
 SCAN_PICK = (0x02, 0x03, 0x04, 0x05)
@@ -92,13 +101,17 @@ def split_line(line):
 
 
 def parse_text(text):
-    """Rules from the preset file's text; other lines are preset.py's business."""
+    """Rules from AZS-cards.txt's text; RuleError names the bad line."""
     found, seen = {}, {}
     for no, line in enumerate(text.splitlines(), 1):
         kv = split_line(line)
-        if not kv or kv[0] not in KEYS:
+        if not kv:
             continue
         key, val = kv
+        if val is None:
+            raise RuleError(f"第 {no} 行：要写成“技能卡 = 名单”：{key}")
+        if key not in KEYS:
+            raise RuleError(f"第 {no} 行：没有叫“{key}”的设置（只认 {' / '.join(KEYS)}）")
         if key in seen:
             raise RuleError(f"第 {no} 行：{key} 在第 {seen[key]} 行已经写过了")
         seen[key] = no
@@ -115,7 +128,7 @@ def parse_text(text):
 
 
 def load(path):
-    """Rules from the preset file; inactive Rules if there is no file."""
+    """Rules from the file; inactive Rules if there is no file."""
     try:
         with open(path, encoding="utf-8-sig") as f:
             return parse_text(f.read())
@@ -246,11 +259,8 @@ class Keyboard:
 
 # --- the picker ------------------------------------------------------------------
 class CardPicker:
-    """Follows the game's output and answers each hand by the rules.
-
-    poll(pid) does one step; run() loops it on its own thread, so a slow memory
-    sweep in the agent never delays a pick.
-    """
+    """Follows the game's output and answers each hand by the rules; poll(pid)
+    does one step."""
 
     def __init__(self, log_path, rules_path, say, keyboard=None, clock=time.monotonic):
         self.tail = LogTail(log_path)
@@ -310,7 +320,7 @@ class CardPicker:
             names = " / ".join(f"{i + 1}.{label(c)}" for i, c in enumerate(h.get("choices", [])))
             self.say(f"cards: hand #{h.get('offer')} ({h.get('why')}): {names}")
             if not rules.active:
-                self.done = True            # listed, so names can be copied into the preset
+                self.done = True            # listed, so names can be copied into the list
                 return
             self.plan = decide(self.hand, rules)
             if self.plan[0] is None:
@@ -343,16 +353,126 @@ class CardPicker:
         self.next_at = self.clock() + RETRY
         self.say(f"cards: {what} — {why}" + (f" (try {self.tries})" if self.tries > 1 else ""))
 
-    def run(self, get_pid, stop=None):
-        while not (stop and stop.is_set()):
-            try:
-                self.poll(get_pid())
-            except Exception as e:      # noqa: BLE001 — never take the agent down
-                self.say(f"cards: {type(e).__name__}: {e}")
-                time.sleep(1.0)
-            time.sleep(POLL)
 
-    def start(self, get_pid):
-        t = threading.Thread(target=self.run, args=(get_pid,), daemon=True)
-        t.start()
-        return t
+
+# --- the program -----------------------------------------------------------------
+def template():
+    """A file whose lists are all commented out: nothing is picked until edited."""
+    return "\n".join([
+        "# AZS 自动选卡名单。cards.bat（AZS-Launcher.bat 会开它）每出一手牌都按这里选。",
+        "# 用法：删掉行首的 #，写上名单，保存；下一手牌就生效，不用重启。",
+        "# 越靠前越优先，用 > 隔开。写名字只认那张卡（照卡上写，不带“等级2”；窗口里会列出每手牌，可以照抄）；",
+        "# 写稀有度（普通 优秀 精良 史诗 传说）就是这个稀有度及以上的任意一张。同一项有几张都符合时选更稀有的，再一样选靠左的。",
+        "# 只在游戏窗口在最前面时按键（1 2 3 选卡、R 重抽）；切走了就等你切回来再选。",
+        "",
+        "# 技能卡 = 神圣愤怒 > 传说 > 审判        # 升级给的法术卡",
+        "# 装备卡 = 天选者印记 > 史诗              # 宝箱 / 守卫给的戒指、饰品、项链",
+        "# 都没有时 = 停下                        # 停下（留给你选）/ 重抽（只用免费次数）/ 稀有度最高 / 第一张，可以用 > 连着写",
+    ]) + "\n"
+
+
+def ensure_file(path):
+    """Write the commented-out template if there is no file yet. True if written."""
+    if os.path.exists(path):
+        return False
+    try:
+        with open(path, "x", encoding="utf-8") as f:
+            f.write(template())
+        return True
+    except OSError:
+        return False
+
+
+def describe(rules):
+    if not rules.active:
+        return "no 技能卡 / 装备卡 list yet — hands are only listed here"
+    return (f"技能卡 {rules.skill or '（不选）'}, 装备卡 {rules.gear or '（不选）'}, "
+            f"都没有时 {list(rules.fallback)}")
+
+
+class GameWatch:
+    """The game's pid while it runs (None otherwise)."""
+
+    def __init__(self, find_pid, open_process, alive, clock=time.monotonic):
+        self.find_pid, self.open_process, self.alive = find_pid, open_process, alive
+        self.clock = clock
+        self.h = self.pid = None
+        self.next_look = 0.0
+
+    def poll(self):
+        if self.h is not None and not self.alive(self.h):
+            self.h = self.pid = None
+        if self.h is None and self.clock() >= self.next_look:
+            self.next_look = self.clock() + WAIT_GAME
+            pid = self.find_pid()
+            if pid:
+                self.h, self.pid = self.open_process(pid), pid
+        return self.pid
+
+
+def run(picker, watch, say, exit_with_game=False, sleep=time.sleep):
+    """Pick until stopped, or until the game closes with exit_with_game."""
+    was = None
+    while True:
+        pid = watch.poll()
+        if pid != was:
+            if pid:
+                say(f"cards: game found (pid {pid})")
+            elif was:
+                if exit_with_game:
+                    say("cards: game closed — exiting with it")
+                    return
+                say("cards: game closed — waiting for it to start again")
+            was = pid
+        try:
+            picker.poll(pid)
+        except Exception as e:      # noqa: BLE001 — one bad hand must not end the picker
+            say(f"cards: {type(e).__name__}: {e}")
+            sleep(1.0)
+        sleep(POLL)
+
+
+def single_instance():
+    """Hold a named mutex; False if another card picker already runs."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    single_instance.handle = k32.CreateMutexW(None, False, "Local\\AZSCardPicker")
+    return ctypes.get_last_error() != 183          # ERROR_ALREADY_EXISTS
+
+
+def say(msg):
+    print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+def main():
+    import game
+    import memscan
+    game.utf8_console()
+    ap = argparse.ArgumentParser(description="AZS card auto-pick")
+    ap.add_argument("--cards", required=True, metavar="FILE",
+                    help="priority lists (技能卡 / 装备卡 / 都没有时); a commented-out template "
+                         "is written if FILE doesn't exist")
+    ap.add_argument("--game-log", required=True, metavar="FILE",
+                    help="the game's standard output (AZS-Launcher.bat saves it there)")
+    ap.add_argument("--exit-with-game", action="store_true",
+                    help="quit once the game closes instead of waiting for the next launch")
+    args = ap.parse_args()
+    if not single_instance():
+        sys.exit("another card picker is already running")
+    if ensure_file(args.cards):
+        say(f"cards: wrote an empty list to {args.cards} — edit it to pick cards")
+    try:
+        say(f"cards: {args.cards}: {describe(load(args.cards))}")
+    except (OSError, RuleError) as e:
+        say(f"cards: {args.cards}: {e} — fix the file; it is read again at every hand")
+    say("cards: started. Keys go to the game only while its window is in front.")
+    picker = CardPicker(args.game_log, args.cards, say)
+    watch = GameWatch(game.find_pid, memscan.open_process, memscan.alive)
+    try:
+        run(picker, watch, say, args.exit_with_game)
+    except KeyboardInterrupt:
+        say("cards: stopped")
+
+
+if __name__ == "__main__":
+    main()
