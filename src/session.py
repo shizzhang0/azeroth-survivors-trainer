@@ -13,6 +13,7 @@ import memscan
 import player
 import trainer
 from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_PAGE_ENTRIES, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
+                     STAT_BACKING,
                      ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_LIMITS, PLAYER_STAT_BASE,
                      PLAYER_UNVERIFIED,
                      STAT, STAT_READONLY, STAT_TAIL)
@@ -341,7 +342,7 @@ class Session:
             if self._append_own(name, value - sum(v for _a, v in entries)):
                 return
             if not entries:
-                label = SPEC[("effect", name)][0]
+                label = (SPEC.get(("effect", name)) or SPEC[("stat", name)])[0]
                 raise SessionError(f"{label}：天赋列表没有空位，身上也没有{label}来源，改不了")
             addr = entries[0][0]
             self._orig[name] = (addr, entries[0][1])
@@ -500,7 +501,7 @@ class Session:
             with self._effect_lock:
                 with self._lock:
                     self._pins.pop(key, None)
-                if kind == "effect" and self.connected:
+                if (kind == "effect" or self._backed(kind, name)) and self.connected:
                     self._clear_effect(name)
             return None
         if not SPEC[key][2]:
@@ -525,7 +526,29 @@ class Session:
                 else:
                     self._pins[key] = before
             raise
+        self._back(kind, name, v)
         return v
+
+    @staticmethod
+    def _backed(kind, name):
+        return kind == "stat" and name in STAT_BACKING
+
+    def _back(self, kind, name, value):
+        """Also carry a locked stat in the talent list (offsets.STAT_BACKING), so
+        the game's own rebuild lands on it. Best effort: the stat-block lock
+        still holds if this fails (no slot, no page)."""
+        if not self._backed(kind, name):
+            return
+        with self._effect_lock:
+            if (kind, name) not in self.pinned():
+                return                      # unlocked meanwhile
+            if self._effect_holds(name, value):
+                return
+            try:
+                self._write_effect(name, value)
+            except SessionError as e:
+                if name not in self._own and name not in self._orig:
+                    self.events.append(f"{name}: lock not backed by the talent list ({e})")
 
     def pinned(self):
         with self._lock:
@@ -552,6 +575,8 @@ class Session:
                         pass                # no slot and no source right now: skip
             else:
                 memscan.write(self.h, self.base + offset(k, n), data)
+                if self._backed(k, n):
+                    self._back(k, n, struct.unpack(SPEC[(k, n)][1], data)[0])
         return 0
 
     def _run(self):
