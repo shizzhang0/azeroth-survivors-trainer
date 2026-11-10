@@ -1,13 +1,12 @@
 # Azeroth Survivors Trainer
 
 单机修改器，针对 **Azeroth Survivors**（Rust + Bevy 重写的 WoW 1.12 客户端）。
-有三种用法：[图形界面](#图形界面推荐)、[游戏内控制器](#游戏内控制器)（插件面板）、[命令行](#命令行)；另带[自动选卡](#自动选卡)和一个[存档工具](#存档工具会改存档)。
+有三种用法：[图形界面](#图形界面推荐)、[游戏内控制器](#游戏内控制器)（插件面板）、[命令行](#命令行)；另带一个[存档工具](#存档工具会改存档)。
 
 修改器纯内存读写：**不改存档、不改 exe、不注入代码**，退出游戏即完全还原。
 唯一会在游戏里申请内存的地方是天赋列表没有空位时，为荆棘 / 生命偷取 / 幸运借用的一页 4 KB 数据（见[原理](#原理)），里面只有数字，不是代码。
 唯一会改存档的是单独的 [`save.py`](#存档工具会改存档)（界面里的“存档”栏也是它），只在游戏关闭时运行，每次先备份。
-除此之外只写这几个文件：启动器复制进游戏 `benilla-config\AddOns` 的插件、你自己的预设 `AZS-preset.txt` 和选卡名单 `AZS-cards.txt`、
-启动器开游戏时保存的游戏输出 `AZS-game-out.txt`（[自动选卡](#自动选卡)靠它知道发了什么牌，每次开游戏重写），
+除此之外只写这几个文件：启动器复制进游戏 `benilla-config\AddOns` 的插件、你自己的预设 `AZS-preset.txt`，
 以及界面记住的游戏 exe 路径（`%APPDATA%\azeroth-survivors-trainer\game-exe.txt`）。仓库里不写任何安装路径，游戏装在哪都行。
 
 ## 已验证版本
@@ -60,7 +59,7 @@ uv run --no-project --with numpy python src/gui.py
 不想切出游戏的话，用游戏内面板：
 
 1. 双击游戏目录里的 **`AZS-Launcher.bat`**（第一次要先放一个，见下面）：它把插件 `AZSRemote` 同步进游戏的
-   `benilla-config\AddOns`，再开游戏，然后在它自己的窗口里跑后台（仓库里的 `remote.bat`）和[自动选卡](#自动选卡)（`cards.bat`）。
+   `benilla-config\AddOns`，再开后台（仓库里的 `remote.bat`）和游戏。
    后台也可以单独双击 `remote.bat` 开（游戏开没开都行），但插件只由启动器装和更新：
    不用启动器的话，手动把仓库里的 `addon\AZSRemote` 整个文件夹复制到游戏的 `benilla-config\AddOns\` 下。
 2. **开一局新冒险**（插件在开局时加载），点屏幕左侧的 **AZS** 按钮（或输入 `/azs`）打开面板。
@@ -71,30 +70,24 @@ uv run --no-project --with numpy python src/gui.py
 5. 游戏关闭时：用启动器开的后台跟着退出，窗口自动关掉；单独双击 `remote.bat` 开的后台继续等，下次开游戏自动连上，
    关掉它的窗口才真正退出。两种情况下所有锁定都随后台停止。
 
-**`AZS-Launcher.bat`（一次双击：同步插件、开游戏、开后台和自动选卡）**：在游戏目录（`AzerothSurvivors.exe` 旁边）放这个文件，把 `TRAINER=` 改成你的仓库路径。
-仓库里放的是一个个独立的功能（`remote.bat`、`cards.bat`），由启动器在游戏目录里组合：插件装到哪、预设和名单在哪、游戏输出存到哪，
-都由它按自己所在的目录给出，仓库里不写任何安装路径。不想要哪个功能，删掉对应那一行就行。
+**`AZS-Launcher.bat`（一次双击：同步插件、开后台、开游戏）**：在游戏目录（`AzerothSurvivors.exe` 旁边）放这个文件，把 `TRAINER=` 改成你的仓库路径。
+仓库里不写任何安装路径：插件装到哪、预设文件在哪，都由它按自己所在的目录给出。
 每次启动都会同步一次插件，`git pull` 之后插件自动跟着更新（插件在开局时加载，开着游戏时更新的下一局生效）。
 
 ```bat
 @echo off
-title AZS
 set "TRAINER=C:\path\to\azeroth-survivors-trainer"
 if not exist "%TRAINER%\remote.bat" (echo Trainer repo not found: %TRAINER% & pause & exit /b 1)
 robocopy "%TRAINER%\addon\AZSRemote" "%~dp0benilla-config\AddOns\AZSRemote" /NJH /NJS /NFL /NDL >nul
 if errorlevel 8 (echo Could not copy the addon into the game folder & pause)
-powershell -NoProfile -Command "Start-Process -FilePath '%~dp0AzerothSurvivors.exe' -WorkingDirectory '%~dp0' -RedirectStandardOutput '%~dp0AZS-game-out.txt' -RedirectStandardError 'NUL'"
-start /b "" cmd /c ""%TRAINER%\cards.bat" --cards "%~dp0AZS-cards.txt" --game-log "%~dp0AZS-game-out.txt" --exit-with-game"
-call "%TRAINER%\remote.bat" --preset "%~dp0AZS-preset.txt" --exit-with-game
+start "AZS remote" /d "%TRAINER%" cmd /c remote.bat --preset "%~dp0AZS-preset.txt" --exit-with-game
+start "" /d "%~dp0" "%~dp0AzerothSurvivors.exe"
 ```
 
-- `powershell ...` 开游戏，并把游戏的输出存进 `AZS-game-out.txt`（自动选卡靠它）；游戏自己的调试日志（stderr）丢掉，不然会刷满这个窗口。
-- `start /b` 让自动选卡在**同一个窗口**的后台跑，`call` 让后台在前台跑；两边的输出都打在这个窗口里，自动选卡的行以 `cards:` 开头。
-  关掉这个窗口，两个都停。
-- `--exit-with-game` 让它们在游戏关闭后退出（游戏开起来之前会一直等，不会提前退），窗口随之关掉；去掉它就一直等下一次开游戏。
+`--exit-with-game` 让后台在游戏关闭后退出（游戏开起来之前它会一直等，不会提前退）；去掉它就和单独开 `remote.bat` 一样一直在后台等。
 
-后台已经在运行时再双击，会提示 `another agent is already running`（自动选卡则是 `another card picker is already running`），
-按任意键即可；这时管事的是原来那个，它是怎么启动的就按哪种方式退出。
+后台已经在运行时再双击，新窗口会提示 `another agent is already running`，按任意键关掉即可；这时管事的是原来那个后台，
+它是怎么启动的就按哪种方式退出。
 
 **每局自动锁定常用数值（预设）**：第一次用启动器开后台时，会在游戏目录（`AZS-Launcher.bat` 旁边）写一个 `AZS-preset.txt`，列出全部属性，默认都注释掉。
 删掉行首的 `#`、在 `=` 后面按面板写法填数（如 `伤害 = 100`、`幸运 = 1000`、`宝箱价格 = 1`），保存即可：
@@ -110,35 +103,6 @@ call "%TRAINER%\remote.bat" --preset "%~dp0AZS-preset.txt" --exit-with-game
 局内也没有 `LaunchURL`），既改不了数值，也启动不了外部程序。所以反过来，由后台程序在内存里找到插件的“信箱”
 （一个以三个魔数开头、等间距存放的数字数组），读插件写进去的命令、执行、再把结果和当前数值写回去，插件只负责显示。
 协议见 [`src/addon_mailbox.py`](src/addon_mailbox.py)。
-
-## 自动选卡
-
-升级出卡、开宝箱 / 打死守卫出装备卡时，按你写的名单替你选。它是个独立的程序（仓库里的 `cards.bat`），
-不需要插件、后台或定位角色，只要游戏的输出和一份名单；`AZS-Launcher.bat` 会把它和后台开在同一个窗口里。
-
-第一次运行时会在游戏目录写一个 `AZS-cards.txt`，例子都注释掉。删掉行首的 `#`、写上名单：
-
-```
-技能卡 = 神圣愤怒 > 传说 > 审判        # 升级给的法术卡
-装备卡 = 天选者印记 > 史诗              # 戒指、饰品、项链
-都没有时 = 重抽 > 稀有度最高            # 名单里一张都没有时，从左往右试
-```
-
-- 越靠前越优先，用 `>` 隔开（`,`、`、` 也行）。写名字就只认那张卡（照卡上的名字写，不带“等级2”）；
-  写稀有度（`普通 优秀 精良 史诗 传说`）就是这个稀有度及以上的任意一张。同一项有几张都符合时选更稀有的，再一样就选靠左的。
-- `都没有时` 可写 `停下`（留给你自己选，**不写时就是这个**）、`重抽`（只用免费次数，不花金币）、`稀有度最高`、`第一张`，可以用 `>` 连着写。
-- 只写 `技能卡` 不写 `装备卡`，装备卡就你自己选，反过来也一样。两行都不写就不选，窗口里照样把每手牌列出来，名字可以照抄进名单。
-- 每出一手牌都重新读文件，局中改完保存，下一手牌就按新的来。写错的行会在窗口里报出行号，改好之前不选。
-- 按的是游戏自己的键（1 2 3 选卡、R 重抽），而且**只在游戏窗口在最前面时才按**：游戏最小化或切到别的窗口时，会提示“等游戏窗口回到前面”，
-  切回来就接着选（Windows 不让按键送进后台窗口，硬按也会按到你正在用的那个窗口里）。按了没反应会再试两次，还不行就留给你。
-- **游戏要由启动器开**：游戏只把发的牌打印到它自己的输出里，内存里没有能稳定读到的地方；启动器把这份输出存进
-  `AZS-game-out.txt`，自动选卡跟着读。直接双击游戏 exe 开的，自动选卡不工作（其他功能照常）。
-
-单独开（游戏要已经由启动器开着，或者之后由启动器开）：
-
-```bat
-cards.bat --cards "C:\...\AzerothSurvivors\AZS-cards.txt" --game-log "C:\...\AzerothSurvivors\AZS-game-out.txt"
-```
 
 ## 命令行
 
@@ -226,7 +190,6 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 | `addon/AZSRemote/` | 游戏内控制器插件（Lua，`/azs`），由 `AZS-Launcher.bat` 每次启动时同步进游戏 |
 | `src/agent.py` / `src/addon_mailbox.py` / `remote.bat` | 控制器后台 / 和插件通信的内存信箱协议 / 双击启动 |
 | `src/preset.py` | 预设文件 `AZS-preset.txt`：解析、每局自动锁定、生成模板 |
-| `src/cardpick.py` / `cards.bat` | 自动选卡：读游戏输出里的手牌、按名单 `AZS-cards.txt` 决定、按键 / 双击启动 |
 | `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |
 
 ## 测试
