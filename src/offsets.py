@@ -158,6 +158,12 @@ PLAYER = {
 
 # Values the game itself never goes past. v1118: the level cap is 120 (seen in
 # game); a higher level could send its experience-table lookup out of bounds.
+# 极速模式: the run timer (HUD "time", what boss arrivals go by), f32 seconds in the
+# player object. v1127: found by turbo.locate (HUD match + probe), then seen at
+# player + 0xFC4 in two runs (the second run's chest price sat at timer + 0x60).
+# Not a FIELDS entry: turbo.Turbo stretches it, nobody types a value into it.
+RUN_TIME = 0xFC4
+
 PLAYER_LIMITS = {"level": (1, 120)}
 
 # Fields whose offset is not confirmed on GAME_VERSION: shown as "?", never written.

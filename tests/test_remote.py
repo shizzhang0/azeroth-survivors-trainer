@@ -16,6 +16,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -50,10 +51,10 @@ class ProtocolAgreementTest(unittest.TestCase):
         src = lua_source()
         slots = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local SLOT = \{(.*?)\};", src, re.S).group(1)))
         for name in ("REQ", "CMD", "ARG1", "ARG2", "ACK", "RESULT", "HEARTBEAT", "STATE", "LUA_BEAT",
-                     "VALUES", "LOCKED", "SIZE"):
+                     "VALUES", "LOCKED", "TURBO_SPEED", "TURBO_STATE", "TURBO_TIME", "SIZE"):
             self.assertEqual(int(slots[name]), getattr(mb, name), name)
         cmds = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local CMD = \{(.*?)\};", src, re.S).group(1)))
-        for name in ("WRITE", "LOCK", "UNLOCK", "HEAL", "UNLOCK_ALL", "RELOCATE"):
+        for name in ("WRITE", "LOCK", "UNLOCK", "HEAL", "UNLOCK_ALL", "RELOCATE", "TURBO"):
             self.assertEqual(int(cmds[name]), getattr(mb, name), name)
         magics = [float(m) for m in re.findall(r'AZSRemote_MB\[\d\] = tonumber\("([-\d.]+)"\);', src)]
         self.assertEqual(tuple(magics), mb.MAGIC[:2])
@@ -248,6 +249,17 @@ class FakeSession:
         self.pins = {}
         self.writes = []
         self.values = {(k, n): 0.0 for k, n, *_ in FIELDS}
+        self.turbo = (1.0, "off", None, "")
+
+    def set_turbo(self, speed):
+        speed = float(speed)
+        if not 1 <= speed <= 20:
+            raise session.SessionError("bad speed")
+        self.turbo = (speed, "on" if speed > 1 else "off", 448.5, "")
+        return speed
+
+    def turbo_status(self):
+        return self.turbo
 
     def read(self):
         return dict(self.values)
@@ -475,6 +487,19 @@ class HandleTest(unittest.TestCase):
             self.assertEqual(agent.handle(s, True, mb.LOCK, level, 30)[0], mb.BAD_INPUT)
         self.assertEqual(agent.handle(s, True, mb.HEAL, 0, 0)[0], mb.OK)
         self.assertEqual(agent.handle(s, False, mb.RELOCATE, 0, 0)[0], mb.OK)
+        self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 4), (mb.OK, "极速模式 4x"))
+        self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 1), (mb.OK, "极速模式 关"))
+        self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 99)[0], mb.FAILED)
+
+    def test_turbo_speed_carries_over_to_the_next_runs_session(self):
+        made = []
+        a = agent.Agent(session_factory=lambda: made.append(FakeSession()) or made[-1])
+        a.turbo_speed = 4.0
+        a.start_locate()
+        deadline = time.time() + 2
+        while a.locating and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(made[-1].turbo[0], 4.0)
 
 
 class ConsoleTest(unittest.TestCase):
@@ -531,7 +556,7 @@ Obj.__index = function(t, k)
     elseif k == "Hide" then self._shown = false
     elseif k == "IsVisible" then return self._shown
     elseif k == "GetName" then return self._name
-    elseif k == "CreateFontString" then return NewObj()
+    elseif k == "CreateFontString" or k == "CreateTexture" then return NewObj()
     elseif k == "RegisterEvent" or k == "UnregisterEvent" then return
     end
   end
@@ -686,6 +711,25 @@ class AddonEndToEndTest(unittest.TestCase):
         self.agent.snapshot()
         self.tick()
         self.assertTrue(str(btn._text).startswith("|cff55ff55"))      # green: ready
+
+    def test_turbo_buttons_round_trip(self):
+        self.g.SlashCmdList["AZSREMOTE"]()
+        self.g.Fire(self.g.AZSRemoteTurbo4, "OnClick")                 # 4x
+        self.tick()
+        self.assertEqual((self.mb[mb.CMD], self.mb[mb.ARG2]), (mb.TURBO, 4))
+        self.agent.serve_once()
+        self.assertEqual(self.session.turbo[0], 4.0)
+        self.assertEqual(self.agent.turbo_speed, 4.0)                  # kept for the next run
+        self.agent.heartbeat()
+        self.agent.snapshot()
+        self.tick()
+        self.assertEqual(str(self.g.AZSRemoteTurbo4._text), "|cff55ff55" + "4x|r")   # picked
+        self.assertEqual(str(self.g.AZSRemoteTurbo1._text), "关")
+        texts = [str(f._text) for f in self.g.FRAMES.values() if f._text]
+        self.assertIn("|cff55ff55局内 7:28|r", texts)                 # 448.5 s
+        self.assertIn("极速模式", "".join(texts))
+        self.assertEqual(self.g.AZSRemote_Clock(59.9), "0:59")
+        self.assertEqual(self.g.AZSRemote_Clock(840), "14:00")
 
     def test_requests_queue_one_at_a_time(self):
         self.g.Fire(self.g.AZSRemoteHeal, "OnClick")

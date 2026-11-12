@@ -12,11 +12,12 @@ import game
 import memscan
 import player
 import trainer
+import turbo
 from offsets import (DOTS_MAX_EXTRA, EFFECT_CAP, EFFECT_LIST, EFFECT_PAGE_ENTRIES, EFFECT_SOURCES, ITEM_DEF_KIND, ITEM_LIST,
                      STAT_BACKING,
                      ITEM_STRIDE, ITEM_VALUE, PLAYER, PLAYER_LIMITS, PLAYER_STAT_BASE,
                      PLAYER_UNVERIFIED,
-                     STAT, STAT_READONLY, STAT_TAIL)
+                     RUN_TIME, STAT, STAT_READONLY, STAT_TAIL)
 
 # (kind, name, label, struct format, lockable, unit, group)
 #   kind  stat   — the f32 cache the game recomputes every 1-3 s: only a lock sticks
@@ -180,6 +181,7 @@ class Session:
         self._orig = {}                 # effect name -> (address, value) we overwrote
         self._moved = None              # the talent list on our page: page and its old (cap, ptr, len)
         self._effect_lock = threading.RLock()
+        self.turbo = None               # 极速模式 (turbo.Turbo), made by locate()
 
     # --- connect ------------------------------------------------------------
     def locate(self):
@@ -210,9 +212,13 @@ class Session:
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+        self.turbo = turbo.Turbo(h, pid, where=self._run_time_addr)
         return base
 
     def close(self):
+        if self.turbo:
+            self.turbo.close()          # before the handle it writes through goes
+            self.turbo = None
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=1)
@@ -258,11 +264,37 @@ class Session:
         if not blob or len(blob) < player.OBJ_SIZE or not self.alive(blob):
             return None
         lists = {}                          # thorns and lifesteal share the talent list
+        self._drain_turbo_events()
         vals = {(k, n): (self._effect_total(n, lists) if k == "effect"
                          else struct.unpack_from(fmt, blob, offset(k, n))[0])
                 for (k, n), (_l, fmt, _c) in SPEC.items()}
         self._last_vals = vals
         return vals
+
+    # --- 极速模式 -------------------------------------------------------------
+    def set_turbo(self, speed):
+        """Run the run timer at speed x (1 = off), on a background thread: see
+        turbo_status(). The timer is the hero's (offsets.RUN_TIME); only if that isn't
+        it does the thread search memory for it (about a minute)."""
+        if not self.turbo:
+            raise SessionError("还没定位到游戏")
+        try:
+            return self.turbo.set_speed(speed)
+        except ValueError as e:
+            raise SessionError(str(e)) from None
+
+    def _run_time_addr(self):
+        """Where the run timer is (the hero's object), or None while we've lost the hero."""
+        base = self.base
+        return None if base is None or self.lost else base + RUN_TIME
+
+    def turbo_status(self):
+        """(speed, state, run time or None, note), or None before locate()."""
+        return self.turbo.status() if self.turbo else None
+
+    def _drain_turbo_events(self):
+        while self.turbo and self.turbo.events:
+            self.events.append(self.turbo.events.pop(0))
 
     # --- summed stats (荆棘, 生命偷取): the game adds list entries each time -----
     def _vec(self, field_offsets, stride, cache=None):
@@ -634,6 +666,8 @@ class Session:
         self.alternates = [a for a in top if a != base]
         self._sigs, self._next_check = {}, 0.0
         self.lost, self.lost_reason = False, None
+        if self.turbo:
+            self.turbo.recheck()            # a new run may have moved the timer too
         if not (self._thread and self._thread.is_alive()):
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, daemon=True)

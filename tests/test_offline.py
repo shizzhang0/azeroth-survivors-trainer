@@ -9,6 +9,7 @@ import hmac
 import shutil
 import tempfile
 import threading
+import time
 import io
 import os
 import struct
@@ -22,7 +23,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import find_clock      # noqa: E402
-import find_runtimer   # noqa: E402
+import find_runtimer   # noqa: E402,F401  (imports cleanly)
+import turbo           # noqa: E402
 import game            # noqa: E402
 import memscan         # noqa: E402
 import offsets         # noqa: E402
@@ -1240,11 +1242,11 @@ class FindClockTest(unittest.TestCase):
         self.assertIsNone(find_clock.pick_stamp(frames[:2], prev, now=60.0))
 
 
-class FindRuntimerTest(unittest.TestCase):
+class TurboTest(unittest.TestCase):
     def test_range_hits_each_kind(self):
         raw = (struct.pack("<f4x", 217.25) + struct.pack("<d", 217.5)
                + struct.pack("<QI4x", 217, 750_000_000) + struct.pack("<fd", 5.0, 999.0))
-        hits = find_runtimer.range_hits(raw, 216.0, 219.0)
+        hits = turbo.range_hits(raw, 216.0, 219.0)
         self.assertEqual(list(hits["f32"][0]), [0])
         self.assertEqual(list(hits["f64"][0]), [8])
         self.assertEqual(list(hits["dur"][0]), [16])
@@ -1253,25 +1255,148 @@ class FindRuntimerTest(unittest.TestCase):
     def test_values_at_matches_range_hits(self):
         raw = (struct.pack("<f4x", 217.25) + struct.pack("<d", 217.5)
                + struct.pack("<QI4x", 217, 750_000_000))
-        for kind, (offs, vals) in find_runtimer.range_hits(raw, 216.0, 219.0).items():
-            self.assertEqual(list(find_runtimer.values_at(raw, kind, offs)), list(vals), kind)
+        for kind, (offs, vals) in turbo.range_hits(raw, 216.0, 219.0).items():
+            self.assertEqual(list(turbo.values_at(raw, kind, offs)), list(vals), kind)
 
     def test_still_growing_allows_a_pause(self):
         v0 = np.array([100.0, 100.0, 100.0, 100.0])
         v1 = np.array([115.0, 106.0, 100.5, 130.0])    # running, half paused, stuck, too fast
-        self.assertEqual(list(find_runtimer.still_growing(v0, v1, 15.0)),
+        self.assertEqual(list(turbo.still_growing(v0, v1, 15.0)),
                          [True, True, False, False])
 
     def test_encode_decode_round_trip(self):
-        for kind in find_runtimer.KINDS:
-            got = find_runtimer.decode(kind, find_runtimer.encode(kind, 480.25))
+        for kind in turbo.KINDS:
+            got = turbo.decode(kind, turbo.encode(kind, 480.25))
             self.assertAlmostEqual(got, 480.25, places=3, msg=kind)
 
     def test_scaled_only_stretches_the_games_own_growth(self):
-        self.assertEqual(find_runtimer.scaled(100.05, 100.0, 3.0)[0], 100.05 + 2 * 0.05)
-        self.assertEqual(find_runtimer.scaled(100.0, 100.0, 3.0), (None, 100.0))   # paused
-        self.assertEqual(find_runtimer.scaled(5.0, 100.0, 3.0), (None, 5.0))       # new run
-        self.assertEqual(find_runtimer.scaled(160.0, 100.0, 3.0), (None, 160.0))   # jumped
+        self.assertEqual(turbo.scaled(100.05, 100.0, 3.0)[0], 100.05 + 2 * 0.05)
+        self.assertEqual(turbo.scaled(100.0, 100.0, 3.0), (None, 100.0))   # paused
+        self.assertEqual(turbo.scaled(5.0, 100.0, 3.0), (None, 5.0))       # new run
+        self.assertEqual(turbo.scaled(160.0, 100.0, 3.0), (None, 160.0))   # jumped
+        # f32 rounding of our own write is not the game moving
+        self.assertEqual(turbo.scaled(100.00001, 100.0, 3.0), (None, 100.00001))
+
+    def test_probe_picks_the_master_and_undoes_every_write(self):
+        game_t = FakeTimers()
+        with game_t.patch():
+            live = list(game_t.v)
+            before = dict(game_t.v)
+            results = turbo.probe(None, live, add=2.0, early=False)
+        self.assertEqual(turbo.pick_master(results), FakeTimers.MASTER)
+        self.assertEqual(game_t.v, before)                      # every +2 s taken back
+        self.assertIsNone(turbo.pick_master([(("x", "f32"), False, 3)]))
+
+    def test_turbo_runs_the_timer_at_speed_and_off_again(self):
+        game_t = FakeTimers(step=0.02)
+        turbo._known[4242] = FakeTimers.MASTER
+        try:
+            with game_t.patch(), mock.patch.object(turbo, "TICK", 0.001), \
+                    mock.patch.object(turbo, "verify", return_value=True):
+                t = turbo.Turbo(None, 4242)
+                try:
+                    t.set_speed(4)
+                    deadline = time.time() + 5
+                    while game_t.own < 1.0 and time.time() < deadline:
+                        time.sleep(0.01)
+                    t.set_speed(1)
+                    time.sleep(0.05)
+                finally:
+                    t.close()
+            got = game_t.v[FakeTimers.MASTER] - 100.0
+            self.assertGreater(game_t.own, 1.0)
+            # the game's own seconds count 4x while on (a tick or two of slack)
+            self.assertAlmostEqual(got / game_t.own, 4.0, delta=0.4)
+            self.assertEqual(t.status()[1], turbo.OFF)
+        finally:
+            turbo._known.pop(4242, None)
+
+    def test_turbo_uses_the_heros_offset_and_follows_it(self):
+        game_t = FakeTimers(step=0.02)
+        hero = {"base": FakeTimers.MASTER[0] - offsets.RUN_TIME}
+        where = lambda: hero["base"] + offsets.RUN_TIME          # noqa: E731
+        with game_t.patch(), mock.patch.object(turbo, "TICK", 0.001), \
+                mock.patch.object(turbo, "locate", side_effect=AssertionError("no search")):
+            t = turbo.Turbo(None, 4243, where=where)
+            try:
+                t.set_speed(2)
+                deadline = time.time() + 5
+                while game_t.own < 0.5 and time.time() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(t.timer, FakeTimers.MASTER)
+                self.assertEqual(t.status()[1], turbo.ON)
+                # the hero moved: its timer moved along (to what was the unrelated clock)
+                hero["base"] = FakeTimers.OTHER[0] - offsets.RUN_TIME
+                deadline = time.time() + 5
+                while t.timer != FakeTimers.OTHER and time.time() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(t.timer, FakeTimers.OTHER)
+            finally:
+                t.close()
+
+    def test_turbo_searches_when_the_offset_is_not_a_time(self):
+        game_t = FakeTimers()
+        game_t.v[(0x9000, "f32")] = float("nan")                  # not a run time there
+        found = threading.Event()
+
+        def fake_locate(_h, say=None, stop=None):
+            found.set()
+            return FakeTimers.MASTER
+
+        with game_t.patch(), mock.patch.object(turbo, "locate", side_effect=fake_locate):
+            t = turbo.Turbo(None, 4244, where=lambda: 0x9000)
+            try:
+                t.set_speed(2)
+                self.assertTrue(found.wait(5))
+            finally:
+                t.close()
+                turbo._known.pop(4244, None)
+
+    def test_turbo_rejects_odd_speeds(self):
+        with mock.patch.object(turbo.Turbo, "_run", lambda self: None):
+            t = turbo.Turbo(None, 1)
+            for bad in (0.5, 0, 21, float("nan")):
+                with self.assertRaises(ValueError):
+                    t.set_speed(bad)
+            self.assertEqual(t.set_speed(2), 2.0)
+
+
+class FakeTimers:
+    """A run timer and its copies, standing in for game memory. The master is what
+    the game advances (by `step` per read of it); copies mirror it and take back
+    any write to them; one unrelated clock keeps whatever is written."""
+    MASTER = (0x1000, "f32")
+    COPIES = [(0x2000, "f32"), (0x3000, "f64"), (0x4000, "dur")]
+    OTHER = (0x5000, "f32")
+
+    def __init__(self, step=0.0):
+        self.step, self.own = step, 0.0
+        self.v = {self.MASTER: 100.0, self.OTHER: 50.0}
+        self.v.update({c: 100.0 for c in self.COPIES})
+        self.lock = threading.Lock()
+
+    def read(self, _h, addr, kind):
+        with self.lock:
+            c = (addr, kind)
+            if c == self.MASTER and self.step:
+                self.v[c] += self.step
+                self.own += self.step
+            if c in self.COPIES:
+                self.v[c] = self.v[self.MASTER]
+            return self.v.get(c)
+
+    def write(self, _h, addr, kind, value):
+        with self.lock:
+            c = (addr, kind)
+            if c not in self.COPIES:           # copies are rewritten from the master
+                self.v[c] = value
+            if c == self.MASTER:
+                for x in self.COPIES:
+                    self.v[x] = value
+            return True
+
+    def patch(self):
+        return mock.patch.multiple(turbo, read_val=self.read, write_val=self.write)
 
 
 if __name__ == "__main__":

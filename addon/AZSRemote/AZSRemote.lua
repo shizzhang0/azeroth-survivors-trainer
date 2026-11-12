@@ -8,10 +8,11 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
-local PROTOCOL = 5;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
+local PROTOCOL = 6;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
-	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 43, SIZE = 72 };
-local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6 };
+	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 43,
+	TURBO_SPEED = 73, TURBO_STATE = 74, TURBO_TIME = 75, SIZE = 75 };
+local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6, TURBO = 7 };
 
 -- kind, name, label, format ("i" whole number / "f" decimal), lockable, unit, group
 -- Labels, order and groups follow the game's character pane; unit says how the
@@ -143,10 +144,19 @@ function AZSRemote_Parse(unit, text)
 end
 
 -- --- panel -----------------------------------------------------------------
-local ROW_H, TOP = 20, -58;
+-- Laid out like the game's character pane: 角色 | 冒险属性 side by side, 状态 below
+-- in two columns of four, then 极速模式 and the buttons on one line. Calls that only
+-- decorate go through try(): if this client lacks one, the panel still works.
+local function try(f, a, b, c, d, e, g)
+	if ( f ) then
+		pcall(f, a, b, c, d, e, g);
+	end
+end
+
+local PAD, COL_W, GAP, ROW_H, TOP = 24, 380, 24, 21, -58;
 local panel = CreateFrame("Frame", "AZSRemoteFrame", UIParent);
-panel:SetWidth(430);
-panel:SetHeight(-TOP + ROW_H * (table.getn(FIELDS) + 2) + 64);
+panel:SetWidth(PAD * 2 + COL_W * 2 + GAP);
+panel:SetHeight(520);
 panel:SetPoint("CENTER", UIParent, "CENTER", 0, 0);
 panel:SetFrameStrata("DIALOG");
 panel:SetBackdrop({
@@ -160,33 +170,64 @@ panel:RegisterForDrag("LeftButton");
 panel:SetScript("OnDragStart", function() this:StartMoving(); end);
 panel:SetScript("OnDragStop", function() this:StopMovingOrSizing(); end);
 panel:Hide();
+if ( UISpecialFrames ) then                 -- Esc closes it, like the game's own panels
+	try(table.insert, UISpecialFrames, "AZSRemoteFrame");
+end
 
 local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge");
-title:SetPoint("TOP", panel, "TOP", 0, -18);
+title:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -22);
 title:SetText("AZS 控制器");
 
 local status = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall");
-status:SetPoint("TOPLEFT", panel, "TOPLEFT", 20, -40);
+status:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 110, -26);
 status:SetText("");
 
 local close = CreateFrame("Button", "AZSRemoteClose", panel, "UIPanelCloseButton");
 close:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -6, -6);
 
-local function addRow(i, y)
+-- a gold heading with a faint rule under it, w wide
+local function heading(text, x, y, w)
+	local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal");
+	h:SetPoint("TOPLEFT", panel, "TOPLEFT", x, y);
+	h:SetText(text);
+	local ok, line = pcall(panel.CreateTexture, panel, nil, "ARTWORK");
+	if ( ok and line ) then
+		try(line.SetTexture, line, 1, 0.82, 0, 0.3);
+		try(line.SetHeight, line, 1);
+		try(line.SetWidth, line, w);
+		try(line.SetPoint, line, "TOPLEFT", panel, "TOPLEFT", x, y - 17);
+	end
+	return h;
+end
+
+local function paintValue(row, locked)
+	if ( row.green ~= locked ) then          -- locked values in green, the rest white
+		if ( locked ) then
+			try(row.cur.SetTextColor, row.cur, 0.4, 1, 0.4);
+		else
+			try(row.cur.SetTextColor, row.cur, 1, 1, 1);
+		end
+		row.green = locked;
+	end
+end
+
+-- one row at column x: label · current value · input · [写] · [锁]
+local function addRow(i, x, y)
 	local kind, label, lockable, unit = FIELDS[i][1], FIELDS[i][3], FIELDS[i][5], FIELDS[i][6];
 	local row = {};
-	local l = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall");
-	l:SetPoint("TOPLEFT", panel, "TOPLEFT", 22, y);
+	local l = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall");
+	l:SetPoint("TOPLEFT", panel, "TOPLEFT", x, y);
 	l:SetText(label);
+	try(l.SetTextColor, l, 0.82, 0.82, 0.82);
 	row.cur = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall");
-	row.cur:SetPoint("TOPRIGHT", panel, "TOPLEFT", 250, y);
+	row.cur:SetPoint("TOPRIGHT", panel, "TOPLEFT", x + 196, y);
 	row.cur:SetJustifyH("RIGHT");
 	row.cur:SetText("-");
 
 	local eb = CreateFrame("EditBox", "AZSRemoteEdit" .. i, panel, "InputBoxTemplate");
-	eb:SetWidth(64);
+	eb:SetWidth(62);
 	eb:SetHeight(18);
-	eb:SetPoint("TOPLEFT", panel, "TOPLEFT", 264, y + 3);
+	eb:SetPoint("TOPLEFT", panel, "TOPLEFT", x + 210, y + 3);
 	eb:SetAutoFocus(false);
 	eb:SetScript("OnEscapePressed", function() this:ClearFocus(); end);
 	row.edit = eb;
@@ -201,19 +242,21 @@ local function addRow(i, y)
 		return v;
 	end
 
+	local lx = x + 280;
 	if ( kind == "player" ) then
 		local b = CreateFrame("Button", "AZSRemoteWrite" .. i, panel, "UIPanelButtonTemplate");
 		b:SetWidth(36);
 		b:SetHeight(18);
-		b:SetPoint("TOPLEFT", panel, "TOPLEFT", 332, y + 3);
+		b:SetPoint("TOPLEFT", panel, "TOPLEFT", x + 280, y + 3);
 		b:SetText("写");
 		b:SetScript("OnClick", function() send(CMD.WRITE, i, value()); end);
+		lx = x + 320;
 	end
 	if ( lockable ) then
 		local c = CreateFrame("CheckButton", "AZSRemoteLock" .. i, panel, "UICheckButtonTemplate");
 		c:SetWidth(22);
 		c:SetHeight(22);
-		c:SetPoint("TOPLEFT", panel, "TOPLEFT", 372, y + 5);
+		c:SetPoint("TOPLEFT", panel, "TOPLEFT", lx, y + 5);
 		local t = getglobal(c:GetName() .. "Text");
 		if ( t ) then
 			t:SetText("锁");
@@ -242,34 +285,69 @@ local function addRow(i, y)
 	rows[i] = row;
 end
 
--- rows under headings, as the game groups them: 角色 / 冒险属性 / 状态
-local y = TOP;
+-- 角色 on the left, 冒险属性 on the right, 状态 under both (four rows a side)
+local LEFT, RIGHT = PAD, PAD + COL_W + GAP;
+local groups, order = {}, {};
 for i = 1, table.getn(FIELDS) do
-	if ( i == 1 or FIELDS[i][7] ~= FIELDS[i - 1][7] ) then
-		if ( i > 1 ) then
-			y = y - 6;
-		end
-		local h = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal");
-		h:SetPoint("TOPLEFT", panel, "TOPLEFT", 18, y);
-		h:SetText("|cffffd100" .. FIELDS[i][7] .. "|r");
-		y = y - 18;
+	local g = FIELDS[i][7];
+	if ( not groups[g] ) then
+		groups[g] = {};
+		table.insert(order, g);
 	end
-	addRow(i, y);
-	y = y - ROW_H;
+	table.insert(groups[g], i);
 end
-panel:SetHeight(-y + 60);                  -- room for the buttons at the bottom
+local function column(list, x, y, from, to)
+	for k = from, to do
+		addRow(list[k], x, y);
+		y = y - ROW_H;
+	end
+	return y;
+end
+local yl, yr = TOP - 24, TOP - 24;
+heading(order[1], LEFT, TOP, COL_W);
+heading(order[2], RIGHT, TOP, COL_W);
+yl = column(groups[order[1]], LEFT, yl, 1, table.getn(groups[order[1]]));
+yr = column(groups[order[2]], RIGHT, yr, 1, table.getn(groups[order[2]]));
+local y = math.min(yl, yr) - 12;
+local st = groups[order[3]];
+local half = math.ceil(table.getn(st) / 2);
+heading(order[3], LEFT, y, COL_W * 2 + GAP);
+yl = column(st, LEFT, y - 24, 1, half);
+yr = column(st, RIGHT, y - 24, half + 1, table.getn(st));
+y = math.min(yl, yr) - 14;
 
-local function button(name, text, x, onclick)
-	local b = CreateFrame("Button", name, panel, "UIPanelButtonTemplate");
-	b:SetWidth(96);
+-- 极速模式: the run timer (what boss arrivals go by) at N x; combat keeps its speed.
+-- The timer sits in the player object; "找计时中…" shows only if it has to be searched for.
+local turboLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal");
+turboLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", LEFT, y - 4);
+turboLabel:SetText("极速模式");
+local TURBO_SPEEDS = { 1, 2, 4, 8 };
+local turboButtons = {};
+for k = 1, table.getn(TURBO_SPEEDS) do
+	local speed = TURBO_SPEEDS[k];
+	local b = CreateFrame("Button", "AZSRemoteTurbo" .. speed, panel, "UIPanelButtonTemplate");
+	b:SetWidth(44);
 	b:SetHeight(22);
-	b:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", x, 18);
+	b:SetPoint("TOPLEFT", panel, "TOPLEFT", LEFT + 72 + (k - 1) * 48, y);
+	b:SetScript("OnClick", function() send(CMD.TURBO, 0, speed); end);
+	turboButtons[k] = b;
+end
+local turboStatus = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall");
+turboStatus:SetPoint("TOPLEFT", panel, "TOPLEFT", LEFT + 72 + 4 * 48 + 8, y - 5);
+turboStatus:SetText("");
+
+local function button(name, text, right, onclick)
+	local b = CreateFrame("Button", name, panel, "UIPanelButtonTemplate");
+	b:SetWidth(88);
+	b:SetHeight(22);
+	b:SetPoint("TOPRIGHT", panel, "TOPLEFT", RIGHT + COL_W - right, y);
 	b:SetText(text);
 	b:SetScript("OnClick", onclick);
 end
-button("AZSRemoteHeal", "回满血", 22, function() send(CMD.HEAL); end);
-button("AZSRemoteUnlock", "全部解锁", 124, function() send(CMD.UNLOCK_ALL); end);
-button("AZSRemoteRelocate", "重新定位", 226, function() send(CMD.RELOCATE); end);
+button("AZSRemoteRelocate", "重新定位", 0, function() send(CMD.RELOCATE); end);
+button("AZSRemoteUnlock", "全部解锁", 94, function() send(CMD.UNLOCK_ALL); end);
+button("AZSRemoteHeal", "回满血", 188, function() send(CMD.HEAL); end);
+panel:SetHeight(-y + 22 + 22);           -- the button line, then the border
 
 -- --- floating toggle button ----------------------------------------------------
 -- Click: open/close the panel. Drag: move it. Its colour is the agent's state.
@@ -317,6 +395,34 @@ local function paintToggle(connected, st)
 end
 
 -- --- talking to the agent ----------------------------------------------------
+local TURBO_TEXT = { [1] = "找计时中…", [3] = "计时暂停", [4] = "没找到计时，稍后重试" };
+
+-- run time the way the HUD writes it: 7:28
+function AZSRemote_Clock(t)
+	local m = math.floor(t / 60);
+	return string.format("%d:%02d", m, math.floor(t - 60 * m));
+end
+
+local function paintTurbo(connected)
+	local want = connected and MB[SLOT.TURBO_SPEED] or 0;
+	for k = 1, table.getn(TURBO_SPEEDS) do
+		local speed = TURBO_SPEEDS[k];
+		local text = (speed == 1) and "关" or (speed .. "x");
+		if ( speed == want ) then
+			text = "|cff55ff55" .. text .. "|r";
+		end
+		turboButtons[k]:SetText(text);
+	end
+	local st, t = MB[SLOT.TURBO_STATE], MB[SLOT.TURBO_TIME];
+	if ( not connected or st == 0 ) then
+		turboStatus:SetText("");
+	elseif ( st == 2 and t >= 0 ) then
+		turboStatus:SetText("|cff55ff55局内 " .. AZSRemote_Clock(t) .. "|r");
+	else
+		turboStatus:SetText("|cffffd100" .. (TURBO_TEXT[st] or "") .. "|r");
+	end
+end
+
 local RESULT_TEXT = { [0] = "完成", [1] = "后台还在定位，稍等", [2] = "输入有误", [3] = "执行失败（看 remote.bat 窗口）" };
 local STATE_TEXT = { [1] = "定位中…（锁定会自动接上）", [2] = "已就绪", [3] = "角色位置变了，马上自动重新定位…" };
 
@@ -369,11 +475,13 @@ driver:SetScript("OnUpdate", function()
 		end
 		status:SetText((st == 2 and "|cff55ff55" or "|cffffd100") .. text .. "|r");
 	end
+	paintTurbo(connected);
 	if ( connected and MB[SLOT.STATE] == 2 ) then
 		local busy = waitingFor or table.getn(queue) > 0;   -- don't undo a fresh click
 		for i = 1, table.getn(FIELDS) do
 			local row = rows[i];
 			row.cur:SetText(AZSRemote_Show(FIELDS[i][6], MB[SLOT.VALUES + i - 1]));
+			paintValue(row, MB[SLOT.LOCKED + i - 1] == 1);
 			if ( row.lock and not busy ) then
 				row.lock:SetChecked(MB[SLOT.LOCKED + i - 1] == 1 and 1 or nil);
 			end
