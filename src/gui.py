@@ -313,8 +313,7 @@ class App:
             self.connected_status()
             self.locate_btn.configure(text="重新定位")
             self.set_enabled(True)
-            if self.turbo_var.get() > 1:
-                self.set_turbo()               # picked before this locate: keep it on
+            self.turbo_var.set(1)              # a fresh session: 极速模式 starts off
         elif kind == "relocated":
             old, new = val
             self.misses = 0
@@ -387,7 +386,9 @@ class App:
         st = self.session.turbo_status()
         text, style = "", "Muted.TLabel"
         if st:
-            _speed, state, value, note = st
+            speed, state, value, note = st
+            if speed <= 1 and self.turbo_var.get() > 1:
+                self.turbo_var.set(1)          # a new run turned it off
             if state == turbo.ON and value is not None:
                 text, style = f"局内 {turbo.fmt_time(value)}", "Locked.TLabel"
             elif state == turbo.LOCATING:

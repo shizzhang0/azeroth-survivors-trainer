@@ -216,6 +216,23 @@ class MailboxFindTest(unittest.TestCase):
             a.check_quiet_addon()
             self.assertIsNone(a.box)                          # the loop re-attaches to the new one
 
+    def test_a_new_runs_addon_turns_turbo_off(self):
+        box = mock.Mock(compatible=True, base=0x1000, stride=8)
+        box.get.return_value = 0.0
+        a = agent.Agent(session_factory=FakeSession)
+        a.turbo_speed = 4.0
+        with mock.patch.object(mb, "find", return_value=box), mock.patch.object(agent, "log"):
+            self.assertTrue(a.attach())
+        self.assertEqual(a.turbo_speed, 1.0)                    # each run starts at 1x
+
+    def test_panel_follows_turbo_turning_itself_off(self):
+        a = agent.Agent(session_factory=FakeSession)
+        a.session, a.located_ok, a.box = FakeSession(), True, mock.Mock()
+        a.turbo_speed = 4.0                                     # but the run started over
+        a.snapshot()
+        self.assertEqual(a.turbo_speed, 1.0)
+        a.box.set.assert_any_call(mb.TURBO_SPEED, 1.0)
+
     def test_older_addon_is_found_but_never_touched(self):
         # a run that started before the addon was updated: 21 fields, old tag
         mem = FakeMem(0x10000, 0x2000)

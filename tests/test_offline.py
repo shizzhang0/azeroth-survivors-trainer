@@ -1274,14 +1274,52 @@ class TurboTest(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertEqual(t.timer, FakeTimers.MASTER)
                 self.assertEqual(t.status()[1], turbo.ON)
-                # the hero moved: its timer moved along (to what was the unrelated clock)
-                hero["base"] = FakeTimers.OTHER[0] - offsets.RUN_TIME
+                # the hero moved mid-run: its timer (same time) moved along, still on
+                with game_t.lock:
+                    game_t.v[FakeTimers.OTHER] = game_t.v[FakeTimers.MASTER]
+                    hero["base"] = FakeTimers.OTHER[0] - offsets.RUN_TIME
                 deadline = time.time() + 5
                 while t.timer != FakeTimers.OTHER and time.time() < deadline:
                     time.sleep(0.01)
+                time.sleep(0.05)
                 self.assertEqual(t.timer, FakeTimers.OTHER)
+                self.assertEqual(t.status()[0], 2.0)
             finally:
                 t.close()
+
+    def test_turbo_turns_itself_off_when_a_new_run_starts(self):
+        game_t = FakeTimers(step=0.02)
+        hero = {"base": FakeTimers.MASTER[0] - offsets.RUN_TIME}
+        where = lambda: hero["base"] + offsets.RUN_TIME          # noqa: E731
+        with game_t.patch(), mock.patch.object(turbo, "TICK", 0.001), \
+                mock.patch.object(turbo, "locate", side_effect=AssertionError("no search")):
+            for new_run in ("same timer starts over", "new hero, new timer"):
+                with game_t.lock:
+                    game_t.v[FakeTimers.MASTER], game_t.v[FakeTimers.OTHER] = 100.0, 50.0
+                    hero["base"] = FakeTimers.MASTER[0] - offsets.RUN_TIME
+                t = turbo.Turbo(None, 4245, where=where)
+                try:
+                    t.set_speed(4)
+                    deadline = time.time() + 5
+                    while t.status()[1] != turbo.ON and time.time() < deadline:
+                        time.sleep(0.01)
+                    with game_t.lock:
+                        if new_run == "same timer starts over":
+                            game_t.v[FakeTimers.MASTER] = 0.5
+                        else:
+                            game_t.v[FakeTimers.OTHER] = 0.5
+                            hero["base"] = FakeTimers.OTHER[0] - offsets.RUN_TIME
+                    deadline = time.time() + 5
+                    while t.status()[0] > 1 and time.time() < deadline:
+                        time.sleep(0.01)
+                    self.assertEqual(t.status()[0], 1.0, new_run)
+                    self.assertIn("新的一局：极速模式已自动关闭", t.events, new_run)
+                    # turned on again in the new run, it stays on
+                    t.set_speed(2)
+                    time.sleep(0.1)
+                    self.assertEqual(t.status()[0], 2.0, new_run)
+                finally:
+                    t.close()
 
     def test_turbo_searches_when_the_offset_is_not_a_time(self):
         game_t = FakeTimers()
