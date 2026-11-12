@@ -182,7 +182,7 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 每 0.05 秒把游戏自己走过的时间按倍率放大，选卡、暂停时计时不走，也就不加。
 内存里还有几十份它的拷贝（v1127 是 54 份）；如果哪天版本变了、那个偏移不再是计时，就退回到在内存里找：
 先找出数值和 HUD 时间对得上、并且在随时间走的变量，再给每个候选**加 2 秒、马上减回去**，能保持住、还带着最多拷贝一起跳的就是本体。
-（试过改 Bevy 引擎的虚拟时钟，能让整个游戏变快，但局内计时不跟着变，所以没用它，研究脚本是 `src/find_clock.py`。）
+（试过改 Bevy 引擎的虚拟时钟，能让整个游戏变快，但局内计时不跟着变，所以没用它，见 [docs/OFFSETS.md](docs/OFFSETS.md)。）
 
 **定位不靠固定地址**，而是：
 
@@ -209,7 +209,6 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 | `addon/AZSRemote/` | 游戏内控制器插件（Lua，`/azs`），由 `AZS-Launcher.bat` 每次启动时同步进游戏 |
 | `src/agent.py` / `src/addon_mailbox.py` / `remote.bat` | 控制器后台 / 和插件通信的内存信箱协议 / 双击启动 |
 | `src/turbo.py` / `src/find_runtimer.py` | 极速模式：找局内计时、按倍率加速 / 命令行版 |
-| `src/find_clock.py` | 研究用：Bevy 虚拟时钟（整个游戏变速，没采用） |
 | `src/preset.py` | 预设文件 `AZS-preset.txt`：解析、每局自动锁定、生成模板 |
 | `tests/` | 离线测试，用假内存模拟进程，不需要开游戏 |
 

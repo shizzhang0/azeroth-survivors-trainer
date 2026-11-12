@@ -95,4 +95,4 @@ uv run --no-project --with numpy python src/find_runtimer.py --test
 - 拷贝变少了：`probe()` 提前停下的条件是“带着至少三分之一的候选一起跳”。
 
 **注意**：`WOW_FIXED_DT` 环境变量看起来像速度开关，但实测只有 1.00x——exe 自己的日志写着它钉的是 **animation clock**（动画时钟），不是游戏时钟。
-改 Bevy 的 `Time<Virtual>.relative_speed`（[`src/find_clock.py`](../src/find_clock.py)）能让整个游戏变速，但局内计时不跟着变，没采用。
+改 Bevy 的 `Time<Virtual>.relative_speed` 能让整个游戏变速，但局内计时不跟着变，没采用（见 [OFFSETS.md](OFFSETS.md) 第三节）。

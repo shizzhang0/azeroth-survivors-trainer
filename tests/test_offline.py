@@ -22,7 +22,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import find_clock      # noqa: E402
 import find_runtimer   # noqa: E402,F401  (imports cleanly)
 import turbo           # noqa: E402
 import game            # noqa: E402
@@ -1190,56 +1189,6 @@ class ScanStoresTest(unittest.TestCase):
                      "f3480f11ae9c060000",      # REX.W: not a plain movss store
                      "f30f11ae9e060000"):       # unaligned displacement
             self.assertEqual(scan_stores.movss_stores(bytes.fromhex(code)), [], code)
-
-
-def bevy_duration(secs, nanos):
-    return struct.pack("<QI4x", secs, nanos)
-
-
-def bevy_time(context, elapsed=123.5):
-    """A Time<T> as rustc might lay it out: context first, then the clock fields."""
-    d = 1 / 60
-    return (context + bevy_duration(3600, 0) + bevy_duration(0, int(d * 1e9))
-            + bevy_duration(int(elapsed), int(elapsed % 1 * 1e9))
-            + struct.pack("<ddd", d, elapsed, elapsed) + bevy_duration(int(elapsed), 0)
-            + struct.pack("<fff4x", d, elapsed, elapsed))
-
-
-VIRTUAL = bevy_duration(0, 250_000_000) + struct.pack("<dd?7x", 1.0, 1.0, False)
-
-
-class FindClockTest(unittest.TestCase):
-    def test_duration_either_field_order(self):
-        q = find_clock.u64s(bevy_duration(3600, 0) + struct.pack("<I4xQ", 0, 3600))
-        self.assertEqual(list(find_clock.duration_hits(q, 3600, 0)), [0, 2])
-
-    def test_finds_virtual_clock_not_plain_time(self):
-        mem = FakeMemory()
-        mem.add(0x10000, 3 * SMALL_CHUNK)
-        virt = 0x10000 + SMALL_CHUNK - 0x20          # straddles a chunk boundary
-        mem.put(virt, bevy_time(VIRTUAL))
-        mem.put(0x10000 + 2 * SMALL_CHUNK, bevy_time(b""))      # plain Time: no speed pair
-        mem.put(0x10000 + 2 * SMALL_CHUNK + 0x400, struct.pack("<dd", 1.0, 1.0))  # stray pair
-        with mem.patch():
-            anchors = find_clock.AnchorScan()
-            memscan.sweep(None, [anchors.visitor()])
-            cands = find_clock.find_candidates(None, anchors.hits)
-        self.assertEqual([c["pair"] for c in cands], [(virt + 16, virt + 24)])
-        self.assertEqual(cands[0]["max_delta"], virt)
-        self.assertEqual(cands[0]["wrap"], virt + len(VIRTUAL))
-
-    def test_growing_picks_clock_slots(self):
-        before = struct.pack("<dddd", 1.0, 100.0, 50.0, 0.0)
-        after = struct.pack("<dddd", 1.0, 100.52, 50.0, 0.5)    # zero start: not a clock
-        self.assertEqual(find_clock.growing(0x1000, before, after, 0.5), [0x1008])
-
-    def test_hud_stamp_stays_on_the_current_run(self):
-        prev = (100.0, 50.0)                    # run time 100 s, read at wall 50 s
-        frames = [(951.0, 60.0),                # a longer earlier run's leftover
-                  (40.0, 60.0),                 # a shorter earlier run's leftover
-                  (109.5, 59.0), (110.0, 60.0)]
-        self.assertEqual(find_clock.pick_stamp(frames, prev, now=60.0), (110.0, 60.0))
-        self.assertIsNone(find_clock.pick_stamp(frames[:2], prev, now=60.0))
 
 
 class TurboTest(unittest.TestCase):
