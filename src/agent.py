@@ -92,7 +92,7 @@ class Agent:
         self.searching = False           # "looking for the addon" already said
         self.quiet_reported = False      # "addon not ticking" already said
         self.beat = 0
-        self.turbo_speed = 1.0           # 极速模式 asked for in the panel; kept across runs
+        self.turbo_speed = 1.0           # 极速模式 asked for in the panel; back to 1 each run
 
     # --- player object, located off the main loop (it takes ~30 s) ---------------
     def start_locate(self):
@@ -107,10 +107,10 @@ class Agent:
             try:
                 base = session.locate()
                 if session is self.session:
+                    self.apply_turbo(session)   # picked while locating: before the panel syncs back
                     self.located_ok = True
                     log(f"hero located at 0x{base:X} — panel is live")
                     self.apply_preset(session)
-                    self.apply_turbo(session)
             except SessionError as e:
                 log(f"could not locate the hero: {e} (click 重新定位 in the panel to retry)")
             except Exception as e:      # noqa: BLE001 — keep the agent alive
@@ -135,7 +135,7 @@ class Agent:
             log(f"preset: {line}")
 
     def apply_turbo(self, session):
-        """极速模式 stays on across runs: a new run's session picks it up."""
+        """极速模式 picked in the panel while the hero was still being located."""
         if self.turbo_speed > 1:
             try:
                 session.set_turbo(self.turbo_speed)
@@ -205,6 +205,9 @@ class Agent:
             return False
         self.box = box
         self.searching = False
+        if self.turbo_speed > 1:            # a new run: each run starts at 1x
+            log("new run — 极速模式 off")
+            self.turbo_speed = 1.0
         self.lua_beat, self.lua_beat_at = box.get(mb.LUA_BEAT), time.time()
         self.last_req = box.get(mb.ACK)      # never replay a request from before we came
         log(f"addon found (stride {box.stride}); locating the hero ...")
@@ -265,7 +268,9 @@ class Agent:
             return
         turbo = self.session.turbo_status()
         if turbo:
-            _speed, state, value, _note = turbo
+            speed, state, value, _note = turbo
+            self.turbo_speed = speed            # it turns itself off when a run starts over
+            box.set(mb.TURBO_SPEED, speed)
             box.set(mb.TURBO_STATE, mb.TURBO_STATES.get(state, 0))
             box.set(mb.TURBO_TIME, -1 if value is None else value)
         vals = self.session.read()

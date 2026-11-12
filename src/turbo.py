@@ -17,8 +17,8 @@ there (another game version), it is searched for, in memory only:
      copies along.
 
 Speeding it up: every TICK, the game's own growth since our last write is scaled by
-the factor. Card picks and pauses stop the timer, so nothing is added then; a drop
-(new run) or a jump is taken as is.
+the factor. Card picks and pauses stop the timer, so nothing is added then. A new run
+starts the timer from 0 again: then 极速模式 turns itself off (each run starts at 1x).
 """
 import struct
 import threading
@@ -43,6 +43,7 @@ SPEEDS = (1, 2, 4, 8)          # what the panels offer; 1 = off
 MAX_SPEED = 20.0
 RETRY = 15.0         # s between attempts to find the timer while 极速模式 is on
 STALE = 60.0         # s the timer may stand still before we ask the HUD whether it moved on
+NEW_RUN_DROP = 5.0   # s the timer falls back by when a new run starts it from 0 again
 
 # Turbo.state
 OFF, LOCATING, ON, PAUSED, FAILED = "off", "locating", "on", "paused", "failed"
@@ -372,12 +373,19 @@ class Turbo:
     def _progress(self, msg):
         self.note = msg
 
+    def _new_run(self, t):
+        """The timer started over: a new run. Each run starts at 1x."""
+        self.speed = 1.0
+        self.value = t
+        self.events.append("新的一局：极速模式已自动关闭")
+
     def _run(self):
         last = None
+        seen = None             # the timer's last value while on, across hero moves
         still_since = None
         while not self._stop.is_set():
             if self.speed <= 1:
-                self.state, self.note, last = OFF, "", None
+                self.state, self.note, last, seen = OFF, "", None, None
                 if self.timer:
                     self.value = read_val(self.h, *self.timer)
                 self._sleep(0.5)
@@ -399,13 +407,16 @@ class Turbo:
                 self.events.append("极速模式：计时读不到了，重新找")
                 self.timer = None
                 continue
+            if seen is not None and t < seen - NEW_RUN_DROP:
+                self._new_run(t)            # the hero (or the timer) we followed started over
+                continue
             if last is None:
                 last = t
             moved = abs(t - last) > 1e-3
             new, last = scaled(t, last, self.speed)
             if new is not None:
                 write_val(self.h, *self.timer, new)
-            self.value = last
+            self.value = seen = last
             now = time.monotonic()
             if moved:
                 still_since = None
