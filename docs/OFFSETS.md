@@ -136,7 +136,7 @@ v1127（2026-11-12）实测：
 +0x74  -10.0         +0x84  2.0  1.0
 ```
 
-**Bevy 虚拟时钟**（`find_clock.py`，研究用，没采用）：exe 是 Bevy 0.18.1。`Time<Virtual>` 资源按特征能唯一找到，整局不搬家：
+**Bevy 虚拟时钟**（研究过，没采用；当时的脚本在提交 `535fb7c` 的 `src/find_clock.py`）：exe 是 Bevy 0.18.1。`Time<Virtual>` 资源按特征能唯一找到，整局不搬家：
 速度对 `+0x00 relative_speed` / `+0x08 effective_speed`（f64），`-0x10 max_delta`（0.25 秒），`+0x18 wrap_period`（3600 秒）。
 写 2.0 后虚拟时钟 2.00x、战斗明显变快，但 HUD 局内时间仍是 1.0x：局内计时不读它。
 

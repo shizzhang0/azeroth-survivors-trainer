@@ -1,8 +1,8 @@
 """极速模式: the run timer runs at N x, nothing else does.
 
 The run timer is the HUD's "time", and boss arrivals (8:00, 14:00) are scheduled on
-it. Combat, cooldowns and movement keep their own speed (Bevy's virtual clock, which
-find_clock.py looked at, would speed all of that up too). v1127: at 4x the 8:00
+it. Combat, cooldowns and movement keep their own speed (Bevy's virtual clock would
+speed all of that up too: docs/OFFSETS.md). v1127: at 4x the 8:00
 boss came after 2 real minutes.
 
 Where the timer is: v1127 keeps it in the player object (offsets.RUN_TIME), so a
