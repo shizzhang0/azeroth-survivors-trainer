@@ -64,7 +64,7 @@ func RVA 5ED1410..5ED27FB  stores=21  distinct=20
 `trainer.py`、`player.py`、`verify_layout.py` 都从这里读偏移。改完跑一遍 `python -m unittest discover -s tests` 再进游戏验证。
 
 > 对象级字段（金币/血/等级/重抽/放逐，`offsets.PLAYER`）若也位移了，用同样的差分法重新确认，
-> 参考 `docs/OFFSETS.md` 第四节的思路：找“只减 1 的小整数”。
+> 参考 `docs/OFFSETS.md` 第五节的思路：找“只减 1 的小整数”。
 
 ## 极端情况
 
@@ -80,15 +80,19 @@ F3 [40/42/44/46] 0F 11 <modrm 0x86/8E/96/9E/A6/AE/B6/BE> <disp32>
 - modrm 的 `mod=10, rm=110` 表示 `[rsi + disp32]`
 - `disp32` 落在 `0x100 ~ 0x10000` 且 4 字节对齐
 
-## 关于极速模式（未实现）
+## 极速模式
 
-想真正改游戏速度，只能注入 DLL 去钩计时 API：
+极速模式用玩家对象里的 `offsets.RUN_TIME`（v1127 是 `+0xFC4`）。版本变了、那里不再是局内计时时，
+[`src/turbo.py`](../src/turbo.py) 会自己发现（计时停住超过 60 秒、和 HUD 对不上）并改为按 HUD 时间在内存里找，所以照样能用，只是第一次打开要等约 1 分钟。
+要重新定这个偏移，进一局正常战斗，跑：
 
-- `QueryPerformanceCounter`（Bevy 的时间来源）
-- `GetTickCount` / `GetTickCount64` / `timeGetTime`
-- `Sleep` / `SleepEx`（按倍率缩放）
+```bash
+uv run --no-project --with numpy python src/find_runtimer.py --test
+```
 
-参考实现：[OpenSpeedy](https://github.com/game1024/OpenSpeedy)（GPL-3.0）。
+它会列出候选，逐个 +10 秒再减回去，最后报出“计时变量”；减去玩家对象的地址（界面状态栏里有）就是新的 `RUN_TIME`。找不到时看：
+- 计时的类型变了：`turbo.KINDS` 目前试 f32、f64、Duration 三种；
+- 拷贝变少了：`probe()` 提前停下的条件是“带着至少三分之一的候选一起跳”。
 
-**注意**：`WOW_FIXED_DT` 环境变量看起来像速度开关，但实测只有 1.00x——
-exe 自己的日志写着它钉的是 **animation clock**（动画时钟），不是游戏时钟。
+**注意**：`WOW_FIXED_DT` 环境变量看起来像速度开关，但实测只有 1.00x——exe 自己的日志写着它钉的是 **animation clock**（动画时钟），不是游戏时钟。
+改 Bevy 的 `Time<Virtual>.relative_speed`（[`src/find_clock.py`](../src/find_clock.py)）能让整个游戏变速，但局内计时不跟着变，没采用。

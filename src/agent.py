@@ -51,6 +51,9 @@ def handle(session, ready, cmd, arg1, arg2):
             for key in session.pinned():
                 session.pin(*key, None)
             return mb.OK, "unlock all"
+        if cmd == mb.TURBO:
+            v = session.set_turbo(arg2)
+            return mb.OK, f"极速模式 {v:g}x" if v > 1 else "极速模式 关"
         i = int(arg1)
         if not 1 <= i <= len(FIELDS):
             return mb.BAD_INPUT, f"field #{i} out of range"
@@ -89,6 +92,7 @@ class Agent:
         self.searching = False           # "looking for the addon" already said
         self.quiet_reported = False      # "addon not ticking" already said
         self.beat = 0
+        self.turbo_speed = 1.0           # 极速模式 asked for in the panel; kept across runs
 
     # --- player object, located off the main loop (it takes ~30 s) ---------------
     def start_locate(self):
@@ -106,6 +110,7 @@ class Agent:
                     self.located_ok = True
                     log(f"hero located at 0x{base:X} — panel is live")
                     self.apply_preset(session)
+                    self.apply_turbo(session)
             except SessionError as e:
                 log(f"could not locate the hero: {e} (click 重新定位 in the panel to retry)")
             except Exception as e:      # noqa: BLE001 — keep the agent alive
@@ -128,6 +133,15 @@ class Agent:
             return
         for line in preset.apply(session, entries):
             log(f"preset: {line}")
+
+    def apply_turbo(self, session):
+        """极速模式 stays on across runs: a new run's session picks it up."""
+        if self.turbo_speed > 1:
+            try:
+                session.set_turbo(self.turbo_speed)
+                log(f"极速模式 {self.turbo_speed:g}x")
+            except SessionError as e:
+                log(f"极速模式: {e}")
 
     def start_relocate(self):
         """Find the hero again (it moved, or 重新定位 was clicked), keeping locks."""
@@ -233,6 +247,8 @@ class Agent:
             cmd, a1, a2 = box.get(mb.CMD), box.get(mb.ARG1), box.get(mb.ARG2)
             if int(cmd) == mb.RELOCATE:
                 self.start_relocate()
+            if int(cmd) == mb.TURBO and a2 is not None and 1 <= a2 <= 20:
+                self.turbo_speed = float(a2)     # also for runs to come, even if not ready yet
             code, line = handle(self.session, self.ready, cmd, a1, a2)
             log(f"panel: {line}")
             box.set(mb.RESULT, code)
@@ -242,8 +258,16 @@ class Agent:
     def snapshot(self):
         box = self.box
         box.set(mb.STATE, self.state())
+        box.set(mb.TURBO_SPEED, self.turbo_speed)
         if not self.ready:
+            box.set(mb.TURBO_STATE, mb.TURBO_STATES["locating" if self.turbo_speed > 1 else "off"])
+            box.set(mb.TURBO_TIME, -1)
             return
+        turbo = self.session.turbo_status()
+        if turbo:
+            _speed, state, value, _note = turbo
+            box.set(mb.TURBO_STATE, mb.TURBO_STATES.get(state, 0))
+            box.set(mb.TURBO_TIME, -1 if value is None else value)
         vals = self.session.read()
         while self.session.events:
             log(self.session.events.pop(0))

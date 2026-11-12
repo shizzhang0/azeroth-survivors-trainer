@@ -29,24 +29,29 @@ LUA_BEAT = 12            # Lua: bumped ~10x a second while the addon runs
 VALUES = 13              # Python: current value of field i at VALUES + i - 1
 N_FIELDS = 30
 LOCKED = VALUES + N_FIELDS   # Python: 1 if field i is locked, at LOCKED + i - 1
-SIZE = LOCKED + N_FIELDS - 1
+TURBO_SPEED = LOCKED + N_FIELDS  # Python: 极速模式 speed wanted (1 = off)
+TURBO_STATE = TURBO_SPEED + 1    # Python: TURBO_* below
+TURBO_TIME = TURBO_SPEED + 2     # Python: run timer in seconds, -1 if not known
+SIZE = TURBO_TIME
 
 # Made at runtime in Lua (tonumber / arithmetic), so they exist only in the table.
 # The third one is the layout tag: 1234000 + 1000 * PROTOCOL + field count. An
 # addon of another version (a run started before an update) has another tag and
 # maybe a shorter array: we must not write into it. Bump PROTOCOL with any slot
 # change (here and in the Lua file).
-PROTOCOL = 5
+PROTOCOL = 6
 LAYOUT_BASE = 1234000.0
 MAGIC = (918273.645, -556677.889, LAYOUT_BASE + 1000 * PROTOCOL + N_FIELDS)
 LUA_SILENT = 5.0         # seconds without LUA_BEAT moving: that array is dead
 
 # commands (CMD)
-WRITE, LOCK, UNLOCK, HEAL, UNLOCK_ALL, RELOCATE = 1, 2, 3, 4, 5, 6
+WRITE, LOCK, UNLOCK, HEAL, UNLOCK_ALL, RELOCATE, TURBO = 1, 2, 3, 4, 5, 6, 7   # TURBO: ARG2 = speed
 # results (RESULT)
 OK, NOT_READY, BAD_INPUT, FAILED = 0, 1, 2, 3
 # states (STATE)
 LOCATING, READY, LOST = 1, 2, 3
+# 极速模式 states (TURBO_STATE), from turbo.Turbo.state
+TURBO_STATES = {"off": 0, "locating": 1, "on": 2, "paused": 3, "failed": 4}
 
 _M = [struct.pack("<d", m) for m in MAGIC]
 
