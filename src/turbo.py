@@ -19,7 +19,14 @@ there (another game version), it is searched for, in memory only:
 Speeding it up: every TICK, the game's own growth since our last write is scaled by
 the factor. Card picks and pauses stop the timer, so nothing is added then. A new run
 starts the timer from 0 again: then 极速模式 turns itself off (each run starts at 1x).
+
+Monsters: ring waves and bosses go by the run timer, so they come N x as well. The
+trickle of single monsters spends a budget the game grows by real frame time; with
+the timer found at the player offset, Spawns keeps that budget (and the kill
+pressure it reads) in run time too. Once 50 are on the field it's one in per kill,
+so late in a run the player's kill speed is what's left of the gap.
 """
+import math
 import struct
 import threading
 import time
@@ -28,7 +35,7 @@ import numpy as np
 
 import game
 import memscan
-from offsets import RUN_TIME
+from offsets import KILL_PRESSURE, RUN_TIME, SPAWN_BUDGET
 
 SLACK = 1.5          # s: the HUD frame lags the timer by up to an update
 LIVE_WAIT = 1.0
@@ -136,6 +143,58 @@ def scaled(t, last, speed, max_step=0.5, min_step=1e-3):
         new = t + (speed - 1) * grown
         return new, new
     return None, t
+
+
+PRESSURE_TAU = 12.0  # s: the game's kill pressure decays by exp(-dt / 12)
+
+
+class Spawns:
+    """Keeps the trickle of single monsters in step with the run timer.
+
+    The game grows a spawn budget by (real frame time) x rate and spends it on
+    monsters; the rate climbs with recent kills (the kill pressure, which decays by
+    real time too). See offsets.SPAWN_BUDGET. At N x the run timer runs N x but
+    neither of these does, so monsters per run-second fall. step() puts them back:
+
+      pressure: kept in run time — it decays over run seconds and gains what the
+        game added (the cost of the kills since), so the rate sees kills per
+        run-second, as at 1x. Growing only the budget overshot: the game read 4x
+        the kills per (real) second and raised the rate on top.
+      budget: its growth since our last look is added (N - 1) times more; when it
+        dropped (a monster took its cost), the recent growth rate stands in.
+
+    Pure: give it what you read, write what it returns.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.run = self.budget = self.pressure = self.kept = None
+        self.rate = 0.0                      # budget growth per game second, recent
+
+    def step(self, run, budget, pressure, speed):
+        """run: the timer after our write; returns (budget, pressure) to write, or None each."""
+        if speed <= 1 or self.run is None or not 0 <= run - self.run <= 5 * speed:
+            self.run, self.budget, self.pressure, self.kept = run, budget, pressure, pressure
+            self.rate = 0.0                  # off, first look, or a new run / jump: start here
+            return None, None
+        drun = run - self.run
+        game_dt = drun / speed               # the game's own seconds since our last look
+        added = max(0.0, pressure - self.pressure * math.exp(-game_dt / PRESSURE_TAU))
+        self.kept = self.kept * math.exp(-drun / PRESSURE_TAU) + added
+        grown = budget - self.budget
+        extra = 0.0
+        if game_dt > 0 and 0 < grown < 1.0:
+            now = grown / game_dt
+            self.rate = 0.8 * self.rate + 0.2 * now if self.rate else now
+            extra = (speed - 1) * grown
+        elif game_dt > 0 and grown < 0:
+            extra = (speed - 1) * self.rate * game_dt
+        new_budget = budget + extra if extra > 0 else None
+        self.run, self.pressure = run, self.kept
+        self.budget = budget if new_budget is None else new_budget
+        return new_budget, self.kept
 
 
 def pick_master(results):
@@ -303,6 +362,7 @@ class Turbo:
         self.timer = _known.get(pid)        # (addr, kind) or None
         self.state, self.note, self.value = OFF, "", None
         self.events = []                    # notes for the UI / agent log
+        self.spawns = Spawns()              # the trickle spawner, kept in step (player offset only)
         self._recheck = self.timer is not None
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -377,7 +437,23 @@ class Turbo:
         """The timer started over: a new run. Each run starts at 1x."""
         self.speed = 1.0
         self.value = t
+        self.spawns.reset()
         self.events.append("新的一局：极速模式已自动关闭")
+
+    def _keep_spawns(self, run):
+        """Monsters per run-second as at 1x: see Spawns. Only next to the player
+        offset's timer — a timer found by search has no known neighbours."""
+        base = self.timer[0] - RUN_TIME
+        budget = read_val(self.h, base + SPAWN_BUDGET, "f32")
+        pressure = read_val(self.h, base + KILL_PRESSURE, "f32")
+        if budget is None or pressure is None or not (-50 < budget < 1000 and 0 <= pressure < 1e6):
+            self.spawns.reset()                 # not what we expect there: leave it alone
+            return
+        new_budget, new_pressure = self.spawns.step(run, budget, pressure, self.speed)
+        if new_pressure is not None:
+            write_val(self.h, base + KILL_PRESSURE, "f32", new_pressure)
+        if new_budget is not None:
+            write_val(self.h, base + SPAWN_BUDGET, "f32", new_budget)
 
     def _run(self):
         last = None
@@ -386,6 +462,7 @@ class Turbo:
         while not self._stop.is_set():
             if self.speed <= 1:
                 self.state, self.note, last, seen = OFF, "", None, None
+                self.spawns.reset()             # the game's own spawning from here
                 if self.timer:
                     self.value = read_val(self.h, *self.timer)
                 self._sleep(0.5)
@@ -402,6 +479,7 @@ class Turbo:
                 addr = self.where()             # follow the hero when it moves
                 if addr is not None and addr != self.timer[0]:
                     self.timer, last = (addr, "f32"), None
+                    self.spawns.reset()         # its fields moved with it
             t = read_val(self.h, *self.timer)
             if t is None or not 0 <= t < MAX_TIME:
                 self.events.append("极速模式：计时读不到了，重新找")
@@ -416,6 +494,8 @@ class Turbo:
             new, last = scaled(t, last, self.speed)
             if new is not None:
                 write_val(self.h, *self.timer, new)
+            if self._from_offset:
+                self._keep_spawns(last)
             self.value = seen = last
             now = time.monotonic()
             if moved:

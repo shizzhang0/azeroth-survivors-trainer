@@ -118,6 +118,18 @@ PLAYER = {
 # Not a FIELDS entry: turbo.Turbo stretches it, nobody types a value into it.
 RUN_TIME = 0xFC4
 
+# The trickle of single monsters, read from the game code (the spawner reads these
+# at code offsets +0x106C / +0x1070: the code's struct starts 0x6C before ours, the
+# run timer being code +0x1030). Each frame:
+#   pressure *= exp(-dt / 12); every non-elite kill adds that enemy's cost
+#   R = (0.025 m^2 + 0.32 m + 0.9) * 0.6, m = run minutes
+#   budget += dt * R * clamp(1.25 * pressure / 12 / R, 1, 3)
+#   while budget >= 1 (8 a frame at most): spawn a monster, budget -= its cost
+# dt is the frame's real time, so this doesn't follow the run timer by itself: turbo
+# keeps pressure in run time and grows the budget N x (turbo.Spawns).
+SPAWN_BUDGET = 0x1000          # f32
+KILL_PRESSURE = 0x1004         # f32
+
 # Values the game itself never goes past: the level cap is 120 (seen in game); a
 # higher level could send its experience-table lookup out of bounds.
 PLAYER_LIMITS = {"level": (1, 120)}

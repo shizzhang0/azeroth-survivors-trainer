@@ -12,6 +12,7 @@ import threading
 import time
 import io
 import os
+import math
 import struct
 import subprocess
 import sys
@@ -1248,6 +1249,50 @@ class TurboTest(unittest.TestCase):
         # f32 rounding of our own write is not the game moving
         self.assertEqual(turbo.scaled(100.00001, 100.0, 3.0), (None, 100.00001))
 
+    # --- the trickle spawner (turbo.Spawns) ---
+    def test_spawns_leave_the_game_alone_at_1x(self):
+        s = turbo.Spawns()
+        for run in (10.0, 10.1, 10.2):
+            self.assertEqual(s.step(run, 0.5, 3.0, 1.0), (None, None))
+
+    def test_spawn_budget_grows_speed_times(self):
+        s = turbo.Spawns()
+        self.assertEqual(s.step(10.0, 0.2, 0.0, 4.0), (None, None))       # first look
+        budget, _ = s.step(10.4, 0.3, 0.0, 4.0)        # 0.1 game s: the game added 0.1
+        self.assertAlmostEqual(budget, 0.3 + 3 * 0.1)
+        budget, _ = s.step(10.8, budget + 0.1, 0.0, 4.0)
+        self.assertAlmostEqual(budget, 0.6 + 0.1 + 0.3)
+
+    def test_a_spawn_drop_uses_the_recent_rate(self):
+        s = turbo.Spawns()
+        s.step(10.0, 0.2, 0.0, 4.0)
+        b, _ = s.step(10.4, 0.3, 0.0, 4.0)             # 1.0 per game second
+        b, _ = s.step(10.8, b + 0.1 - 1.0, 0.0, 4.0)   # grew 0.1, a monster took 1.0
+        self.assertAlmostEqual(b, 0.6 + 0.1 - 1.0 + 3 * 1.0 * 0.1)
+
+    def test_kill_pressure_decays_over_run_seconds(self):
+        s = turbo.Spawns()
+        s.step(100.0, 0.0, 12.0, 4.0)
+        game_p = 12.0 * math.exp(-1.0 / 12)            # one game second, no kills
+        _, p = s.step(104.0, 0.0, game_p, 4.0)         # = four run seconds
+        self.assertAlmostEqual(p, 12.0 * math.exp(-4.0 / 12))
+
+    def test_kill_pressure_keeps_the_games_kills(self):
+        s = turbo.Spawns()
+        s.step(100.0, 0.0, 6.0, 4.0)
+        _, p = s.step(100.0, 0.0, 6.0 + 2.5, 4.0)      # paused, a kill worth 2.5 landed
+        self.assertAlmostEqual(p, 8.5)
+        _, p2 = s.step(104.0, 0.0, p * math.exp(-1.0 / 12) + 1.0, 4.0)
+        self.assertAlmostEqual(p2, 8.5 * math.exp(-4.0 / 12) + 1.0)
+
+    def test_spawns_start_over_on_a_new_run(self):
+        s = turbo.Spawns()
+        s.step(300.0, 0.5, 9.0, 4.0)
+        self.assertEqual(s.step(1.0, 0.1, 0.0, 4.0), (None, None))         # timer fell back
+        b, p = s.step(1.4, 0.2, 0.0, 4.0)
+        self.assertAlmostEqual(b, 0.2 + 3 * 0.1)
+        self.assertAlmostEqual(p, 0.0)
+
     def test_probe_picks_the_master_and_undoes_every_write(self):
         game_t = FakeTimers()
         with game_t.patch():
@@ -1308,6 +1353,35 @@ class TurboTest(unittest.TestCase):
                 self.assertEqual(t.status()[0], 2.0)
             finally:
                 t.close()
+
+    def test_turbo_grows_the_spawn_budget_with_the_timer(self):
+        game_t = FakeTimers(step=0.02)
+        base = FakeTimers.MASTER[0] - offsets.RUN_TIME
+        budget, pressure = (base + offsets.SPAWN_BUDGET, "f32"), (base + offsets.KILL_PRESSURE, "f32")
+        game_t.v[budget], game_t.v[pressure] = 0.0, 0.0
+        game_read = game_t.read
+
+        def read(h, addr, kind):                   # the game adds 1 per game second
+            if (addr, kind) == FakeTimers.MASTER and game_t.step:
+                with game_t.lock:
+                    game_t.v[budget] += game_t.step
+            return game_read(h, addr, kind)
+        with game_t.patch(), mock.patch.object(turbo, "read_val", read), \
+                mock.patch.object(turbo, "TICK", 0.001), \
+                mock.patch.object(turbo, "locate", side_effect=AssertionError("no search")):
+            t = turbo.Turbo(None, 4245, where=lambda: base + offsets.RUN_TIME)
+            try:
+                t.set_speed(4)
+                deadline = time.time() + 5
+                while game_t.own < 1.0 and time.time() < deadline:
+                    time.sleep(0.01)
+                t.set_speed(1)
+                time.sleep(0.05)
+            finally:
+                t.close()
+        # the timer ran ~4x the game's own seconds; the budget kept up with it
+        self.assertGreater(game_t.v[budget], 3.0 * game_t.own)
+        self.assertLess(game_t.v[budget], 4.5 * game_t.own)
 
     def test_turbo_turns_itself_off_when_a_new_run_starts(self):
         game_t = FakeTimers(step=0.02)
