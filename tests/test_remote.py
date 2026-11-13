@@ -568,6 +568,8 @@ Obj.__index = function(t, k)
     elseif k == "SetChecked" then self._checked = a
     elseif k == "GetChecked" then return self._checked
     elseif k == "SetText" then self._text = a
+    elseif k == "SetTexture" then self._tex = a; return TEXTURE_OK
+    elseif k == "GetTexture" then return TEXTURE_OK and self._tex
     elseif k == "GetText" then return self._text or ""
     elseif k == "Show" then self._shown = true
     elseif k == "Hide" then self._shown = false
@@ -747,6 +749,29 @@ class AddonEndToEndTest(unittest.TestCase):
         self.assertIn("极速模式", "".join(texts))
         self.assertEqual(self.g.AZSRemote_Clock(59.9), "0:59")
         self.assertEqual(self.g.AZSRemote_Clock(840), "14:00")
+
+    def test_icon_button_when_the_client_loads_the_picture(self):
+        L = lua51.LuaRuntime(unpack_returned_tuples=True)
+        L.execute(WOW_STUB)
+        L.execute("TEXTURE_OK = 1")
+        L.execute(lua_source())
+        g = L.globals()
+        btn = g.AZSRemoteToggle
+        self.assertIsNone(L.eval("rawget")(btn, "_text"))           # no "AZS" text: the icon
+        self.assertEqual(L.eval("rawget")(btn, "_tex"), None)       # the texture sits on a child
+        rawget = L.eval("rawget")
+        dot = lambda: [str(rawget(f, "_tex")) for f in g.FRAMES.values()          # noqa: E731
+                       if "dot_" in str(rawget(f, "_tex") or "")][0]
+        g.Tick(0.2)
+        self.assertTrue(dot().endswith("dot_red"))                     # no agent
+        a = agent.Agent(session_factory=FakeSession)
+        a.box, a.session, a.located_ok = LuaBox(g.AZSRemote_MB), FakeSession(), True
+        a.heartbeat()
+        a.snapshot()
+        g.Tick(0.2)
+        self.assertTrue(dot().endswith("dot_green"))                   # ready
+        g.Fire(btn, "OnClick")
+        self.assertTrue(g.AZSRemoteFrame._shown)
 
     def test_requests_queue_one_at_a_time(self):
         self.g.Fire(self.g.AZSRemoteHeal, "OnClick")
