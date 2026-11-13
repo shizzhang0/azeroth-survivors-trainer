@@ -1,0 +1,4 @@
+# icons: binary, never line-ending converted
+*.ico binary
+*.tga binary
+*.png binary

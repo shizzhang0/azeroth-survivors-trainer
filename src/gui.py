@@ -28,6 +28,7 @@ import turbo
 from session import FIELDS, SPEC, UNIT, Session, SessionError, parse, show
 
 REFRESH_MS = 300
+ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
 LOST_AFTER = 3          # unreadable refreshes in a row before we call the target gone
 
 # --- look ---------------------------------------------------------------------
@@ -110,6 +111,33 @@ def apply_style(root):
                 lightcolor=ACCENT, darkcolor=ACCENT, thickness=6)
 
 
+def set_icon(root):
+    """Window and taskbar icon (make_icon.py). Tk's own iconbitmap always takes the 16 px
+    picture and stretches it (24 px title bar at 150%: blurry), so on Windows we ask for
+    the exact sizes the system wants and hand them to the window ourselves."""
+    try:
+        root.iconbitmap(default=ICON)           # elsewhere, and the fallback
+    except tk.TclError:
+        return
+    try:
+        from ctypes import wintypes
+        u32 = ctypes.windll.user32
+        u32.LoadImageW.restype = wintypes.HANDLE
+        u32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                                   ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        u32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        root.update_idletasks()
+        hwnd = u32.GetParent(root.winfo_id())
+        IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
+        for which, metric in ((0, 49), (1, 11)):        # ICON_SMALL / SM_CXSMICON, ICON_BIG / SM_CXICON
+            n = u32.GetSystemMetrics(metric)
+            icon = u32.LoadImageW(None, ICON, IMAGE_ICON, n, n, LR_LOADFROMFILE)
+            if icon:
+                u32.SendMessageW(hwnd, WM_SETICON, which, icon)   # kept for the window's life
+    except (AttributeError, OSError):
+        pass
+
+
 def card(parent, title, note=""):
     """A white card with a bold title (and a muted note). Returns (card, header, body)."""
     outer = ttk.Frame(parent, style="Card.TFrame", padding=(16, 12, 16, 14))
@@ -134,6 +162,7 @@ class App:
 
         root.title("Azeroth Survivors 修改器")
         root.resizable(False, False)
+        set_icon(root)
         apply_style(root)
 
         # header: title, connection status, the one big button
@@ -178,7 +207,7 @@ class App:
         ttk.Button(state_body, text="回满血", style="Small.TButton", command=self.heal).grid(
             row=prow, column=0, sticky="w", pady=(10, 0))
 
-        tb, _h, tb_body = card(right, "极速模式", "局内计时加速，首领更早到来")
+        tb, _h, tb_body = card(right, "极速模式")
         tb.pack(fill="x", pady=(12, 0))
         seg = ttk.Frame(tb_body, style="Body.TFrame")
         seg.pack(side="left")
@@ -653,6 +682,10 @@ def main():
     game.utf8_console()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)     # crisp text on scaled displays
+    except (AttributeError, OSError):
+        pass
+    try:            # its own taskbar button (with our icon), not grouped under python.exe
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("azeroth-survivors-trainer.gui")
     except (AttributeError, OSError):
         pass
     root = tk.Tk()

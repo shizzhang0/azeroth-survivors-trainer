@@ -67,8 +67,9 @@ uv run --no-project --with numpy python src/gui.py
    `benilla-config\AddOns`，再开后台（仓库里的 `remote.bat`）和游戏。
    后台也可以单独双击 `remote.bat` 开（游戏开没开都行），但插件只由启动器装和更新：
    不用启动器的话，手动把仓库里的 `addon\AZSRemote` 整个文件夹复制到游戏的 `benilla-config\AddOns\` 下。
-2. **开一局新冒险**（插件在开局时加载），点屏幕左侧的 **AZS** 按钮（或输入 `/azs`）打开面板。
-   按钮可以拖到任意位置，位置会被游戏记住；颜色就是后台状态：红 = 后台没开，黄 = 定位中，绿 = 已就绪。
+2. **开一局新冒险**（插件在开局时加载），点屏幕左侧的 **AZS 图标**（金边蓝底、中间一道闪电；或输入 `/azs`）打开面板。
+   图标可以拖到任意位置，位置会被游戏记住；右下角圆点的颜色就是后台状态：红 = 后台没开，黄 = 定位中，绿 = 已就绪。
+   （客户端读不了插件里的图片时，显示成文字按钮“AZS”，文字颜色表示同样的状态。）
 3. 状态显示“定位中…”约 30～60 秒，变绿色“已就绪”后：属性按游戏的写法填数（如伤害 `100` = +100%）按回车或勾“锁”；状态字段点“写”，能锁的也可以勾“锁”。
    最下面一行是 **极速模式**：点“2x / 4x / 8x”打开（立即生效，旁边显示局内时间），点“关”停下。
    每局开始时自动回到“关”（死了重开也一样），新的一局要用再点。再下面有“回满血”“全部解锁”“重新定位”。
@@ -202,6 +203,7 @@ uv run --no-project --with numpy python src/save.py --import plain.txt   # 加�
 | `src/game.py` | 找游戏进程、读取 HUD 数据 |
 | `src/player.py` / `src/trainer.py` | 状态层 / 属性层命令行工具 |
 | `src/gui.py` / `src/session.py` / `gui.bat` | 图形界面 / 界面背后的定位、读写、锁定逻辑 / 双击启动 |
+| `src/make_icon.py` → `src/icon.ico`、`addon/AZSRemote/icon.tga` | 画图标（原创：游戏图标风格的金边徽章 + 闪电），生成窗口图标和游戏内按钮的图片；改图标就改它再跑一遍（要 Pillow） |
 | `src/verify_layout.py` | 只读自检：偏移还对不对 |
 | `src/scan_stores.py` / `src/group_stores.py` | 从 exe 里重新扫属性写回点（纯标准库） |
 | `src/diffscan.py` | 差分扫描，找未知字段 |

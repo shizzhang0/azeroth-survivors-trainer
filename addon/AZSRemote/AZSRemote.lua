@@ -350,7 +350,7 @@ button("AZSRemoteHeal", "回满血", 188, function() send(CMD.HEAL); end);
 panel:SetHeight(-y + 22 + 22);           -- the button line, then the border
 
 -- --- floating toggle button ----------------------------------------------------
--- Click: open/close the panel. Drag: move it. Its colour is the agent's state.
+-- Click: open/close the panel. Drag: move it. It shows the agent's state.
 local function togglePanel()
 	if ( panel:IsVisible() ) then
 		panel:Hide();
@@ -359,12 +359,45 @@ local function togglePanel()
 	end
 end
 
-local toggle = CreateFrame("Button", "AZSRemoteToggle", UIParent, "UIPanelButtonTemplate");
-toggle:SetWidth(52);
-toggle:SetHeight(22);
+-- It is the trainer's icon (icon.tga next to this file, drawn by src/make_icon.py)
+-- with a dot in the state's colour. A client that can't load the picture gets the
+-- text button instead: "AZS" in the state's colour.
+local ICON_DIR = "Interface\\AddOns\\AZSRemote\\";
+local ICON = ICON_DIR .. "icon";
+local function iconLoads()
+	local ok, probe = pcall(UIParent.CreateTexture, UIParent, nil, "BACKGROUND");
+	if ( not ok or not probe ) then
+		return false;
+	end
+	local set, loaded = pcall(probe.SetTexture, probe, ICON);
+	local has, path = pcall(probe.GetTexture, probe);
+	pcall(probe.Hide, probe);
+	return set and (loaded or (has and path)) and true or false;
+end
+
+local toggle, toggleDot;
+if ( iconLoads() ) then
+	toggle = CreateFrame("Button", "AZSRemoteToggle", UIParent);
+	toggle:SetWidth(28);
+	toggle:SetHeight(28);
+	local art = toggle:CreateTexture(nil, "ARTWORK");
+	art:SetTexture(ICON);
+	art:SetWidth(28);
+	art:SetHeight(28);
+	art:SetPoint("CENTER", toggle, "CENTER", 0, 0);
+	-- the dot is a picture too (dot_red / dot_yellow / dot_green.tga): no font glyph needed
+	toggleDot = toggle:CreateTexture(nil, "OVERLAY");
+	toggleDot:SetWidth(10);
+	toggleDot:SetHeight(10);
+	toggleDot:SetPoint("BOTTOMRIGHT", toggle, "BOTTOMRIGHT", 2, -2);
+else
+	toggle = CreateFrame("Button", "AZSRemoteToggle", UIParent, "UIPanelButtonTemplate");
+	toggle:SetWidth(52);
+	toggle:SetHeight(22);
+	toggle:SetText("AZS");
+end
 toggle:SetPoint("LEFT", UIParent, "LEFT", 16, 120);
 toggle:SetFrameStrata("HIGH");
-toggle:SetText("AZS");
 toggle:SetMovable(true);
 toggle:RegisterForDrag("LeftButton");
 local dragged = false;
@@ -386,12 +419,21 @@ toggle:SetScript("OnClick", function()
 	togglePanel();
 end);
 
+local DOT = { ["|cffff5555"] = "red", ["|cffffd100"] = "yellow", ["|cff55ff55"] = "green" };
+local dotNow;
 local function paintToggle(connected, st)
 	local colour = "|cffff5555";            -- red: agent not running
 	if ( connected ) then
 		colour = (st == 2) and "|cff55ff55" or "|cffffd100";
 	end
-	toggle:SetText(colour .. "AZS|r");
+	if ( toggleDot ) then
+		if ( DOT[colour] ~= dotNow ) then    -- set the picture only when the state changes
+			dotNow = DOT[colour];
+			toggleDot:SetTexture(ICON_DIR .. "dot_" .. dotNow);
+		end
+	else
+		toggle:SetText(colour .. "AZS|r");
+	end
 end
 
 -- --- talking to the agent ----------------------------------------------------
