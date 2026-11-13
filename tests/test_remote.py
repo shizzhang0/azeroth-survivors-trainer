@@ -76,7 +76,7 @@ class GameUnitsTest(unittest.TestCase):
     """The panels show and take values the way the game's character pane does."""
 
     def test_shows_like_the_pane(self):
-        # raw values and what the v1118 pane printed for them
+        # raw values and what the game's pane printed for them
         for unit, raw, text in [
                 ("num", 447.0, "447"), ("+%1", 1.733, "+73%"), ("haste", 0.877, "+12%"),
                 ("%.1", 0.2644, "26.4%"), ("%", 2.254, "225%"), ("%", 0.322, "32%"),
@@ -427,7 +427,7 @@ class PresetTest(unittest.TestCase):
         self.assertEqual(len(s.writes), 3)                         # one write each
 
     def test_counters_and_gold_are_written_once_not_locked(self):
-        # a locked banish count let a run banish its card pool empty (v1118)
+        # a locked banish count let a run banish its card pool empty
         s = FakeSession()
         preset.apply(s, preset.parse_text("金币数量 = 99999\n重抽次数 = 100\n放逐次数 = 100"))
         self.assertEqual(s.pins, {})

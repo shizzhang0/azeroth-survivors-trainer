@@ -5,7 +5,7 @@
 Pattern: F3 [REX] 0F 11 <modrm> <disp32>
   F3 0F 11   movss m32, xmm
   REX        optional 40/42/44/46: R picks xmm8..15, X is unused here. Never B
-             (that turns rsi into r14) or W. v1127 stores xp from xmm13
+             (that turns rsi into r14) or W. The game stores xp from xmm13
              (F3 44 0F 11 AE 9C 06 00 00), which the plain form missed.
   modrm      mod=10, rm=110 -> [rsi + disp32]
   disp32     0x100..0x10000, 4-byte aligned

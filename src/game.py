@@ -154,7 +154,7 @@ def read_hud(h, require=(), watch=None):
     """The current run's newest HUD frame: live numbers the game itself prints.
 
     Frames of earlier runs linger in memory, and one from a longer run beats the
-    current run on `time` (v1118: a level-49 frame at 951 s next to a 116 s run).
+    current run on `time` (seen: a level-49 frame at 951 s next to a 116 s run).
     The live run keeps rewriting its frame buffers, so we look again after
     `watch` seconds and take the newest frame among those that changed. If none
     changed (game paused), the run with the most frames in memory wins.
