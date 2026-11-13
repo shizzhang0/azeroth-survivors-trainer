@@ -1,7 +1,7 @@
 # 存档格式
 
 存档在 `%APPDATA%\wenilla-rogue\characters.txt`，同目录 `Saves\` 下是游戏自己的定时备份。
-工具：[`src/save.py`](../src/save.py)。以下基于 v0.2.0-1118 实测。
+工具：[`src/save.py`](../src/save.py)。以下都是实测。
 
 ## 加密
 
@@ -19,7 +19,7 @@ key 是编译进 exe 的常量（42 字节）。exe 里存的是 HMAC 预先算�
 紧挨着放在 `.rdata`；`save.py` 每次从 exe 里找出这对块，用能通过当前存档 tag 校验的那个作为 key，
 所以仓库里不存 key，游戏换 key 也会被发现。
 
-逆向入口（1118）：解码函数 `RVA 0x5FDB0F0`（比较 `RSE1:` 头）、解密 `0x5FDA7A0`、HMAC-SHA1 `0x5FDAA20`。
+逆向入口：从 exe 里 `RSE1:` 字符串的交叉引用找到解码函数（比较这个头的那个），它调用的就是解密和 HMAC-SHA1 两个函数。地址每次更新都会变，所以不记具体 RVA。
 
 ## 明文：一行一个字段
 

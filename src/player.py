@@ -24,7 +24,7 @@ import numpy as np
 
 import game
 import memscan
-from offsets import (GAME_VERSION, PLAYER, PLAYER_FINGERPRINT, PLAYER_LIMITS, PLAYER_UNVERIFIED,
+from offsets import (PLAYER, PLAYER_FINGERPRINT, PLAYER_LIMITS, PLAYER_UNVERIFIED,
                      STAT_RANGES, player_stat)
 
 # Writable run-state fields, in write order (maxhp before anything that reads it).
@@ -76,7 +76,7 @@ def hud_score(blob, info):
     """How many HUD numbers this candidate agrees with, 0-4.
 
     matches_hud() is only a gate: its gold fallback is loose on purpose, so a
-    stray block with a gold-like number can pass it (v1118: level 1, max hp 98,
+    stray block with a gold-like number can pass it (seen: level 1, max hp 98,
     kills garbage, picked over the real hero because it sat at a lower
     address). The HUD frame can date from early in a ~30 s sweep, so the run
     moves on meanwhile — slack is generous, but a wrong block misses by a mile.
@@ -128,7 +128,7 @@ def locate_ranked(h, info=None):
     """([candidates tied on the best HUD score, lowest address first], hud).
 
     At the start of a run several objects can hold the same opening numbers
-    (v1118: a frozen copy at level 1 / gold 0 / kills 0 next to the hero), so a
+    (seen: a frozen copy at level 1 / gold 0 / kills 0 next to the hero), so a
     tie is not rare; callers break it by watching which one moves.
 
     `info` stands in for the HUD frame (level/kills/gold/hpMax): pass the hero's
@@ -227,7 +227,7 @@ def main():
     writes = [(n, getattr(args, n)) for n in WRITABLE if getattr(args, n) is not None]
     blocked = [n for n, _v in writes if n in PLAYER_UNVERIFIED]
     if blocked:
-        sys.exit(f"{', '.join(blocked)}: offset not verified on {GAME_VERSION}, refusing to write")
+        sys.exit(f"{', '.join(blocked)}: offset not verified on this game version, refusing to write")
     for name, value in writes:
         lo, hi = PLAYER_LIMITS.get(name, (value, value))
         if not lo <= value <= hi:

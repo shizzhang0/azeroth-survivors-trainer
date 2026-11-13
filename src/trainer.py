@@ -27,7 +27,7 @@ FIELDS = {**STAT, **STAT_TAIL}
 SPAN = max(FIELDS.values()) // 4 + 1        # floats per stat block (incl. tail)
 SHOWN = ("hp", "dmg", "cd", "crit", "spd", "pick", "xp", "gold", "arm", "luck")
 MAX_MISSES = 3          # consecutive failed re-validations before a target is dropped
-# The game recomputes the block every 1-3 s. Measured on v1118: at 0.25 s the
+# The game recomputes the block every 1-3 s. Measured: at 0.25 s the
 # panel flickered back to the real value for up to 168 ms; at 0.02 s, <= 22 ms.
 PIN_INTERVAL = 0.02
 

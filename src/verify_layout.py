@@ -5,8 +5,7 @@ whether the offsets we rely on still hold. Writes nothing.
 
   python verify_layout.py [pid]
 
-Known layouts live in offsets.STAT_LAYOUTS; the checker tries each distinct
-one (newest first) and reports every version that has the one that fits.
+The stat-block layout checked is offsets.STAT, the current game's.
 """
 import re
 import sys
@@ -14,7 +13,7 @@ import sys
 import game
 import memscan
 import player
-from offsets import GAME_VERSION, PLAYER, PLAYER_UNVERIFIED, STAT_LAYOUTS as LAYOUTS
+from offsets import PLAYER, PLAYER_UNVERIFIED, STAT
 
 LINE_RE = re.compile(r"hp=[0-9.]+;dmg=[^;]*;(?:.*?)pet=[0-9.]+")
 
@@ -59,15 +58,6 @@ def struct_checks(v, lay):
         (lay["luck"] // 4, luck - 0.02, luck + 0.02),
         (lay["gold"] // 4, gold - 0.02, gold + 0.02),
     ]
-
-
-def distinct_layouts(layouts=LAYOUTS):
-    """[(version names, layout)], newest first. Versions with the same offsets
-    (1118 back to 1033) share one entry, and so one memory sweep."""
-    out = {}
-    for name, lay in layouts.items():
-        out.setdefault(tuple(sorted(lay.items())), ([], lay))[0].append(name)
-    return list(out.values())
 
 
 def find_struct(h, v, lay):
@@ -165,24 +155,19 @@ def main():
     if not pid:
         sys.exit("game window not found")
     h = memscan.open_process(pid)
-    print(f"pid={pid}   (offsets.py targets {GAME_VERSION})")
+    print(f"pid={pid}")
 
     lines = stat_lines(h)
     print(f"{len(lines)} distinct stats line(s)")
     if not lines:
         sys.exit("no stats line — is a run in progress?")
 
-    for text, v in lines.items():
-        hit = None
-        for names, lay in distinct_layouts():
-            cands = find_struct(h, v, lay)
-            if cands:
-                hit = (" / ".join(names), lay, cands)
-                break
-        if not hit:
+    lay = STAT
+    for v in lines.values():
+        cands = find_struct(h, v, lay)
+        if not cands:
             continue
-        name, lay, cands = hit
-        print(f"layout that fits: {name}")
+        print("the stat block matches offsets.STAT")
         addr = cands[0]
         print(f"struct: {[hex(c) for c in cands]}")
         ctx = memscan.floats_at(h, addr, 24)
@@ -205,7 +190,8 @@ def main():
             print(f"VERDICT: {bad} structural field(s) moved — do NOT write until re-identified")
         break
     else:
-        print("no struct matched any line (run may be paused / not in a run)")
+        print("no struct matched offsets.STAT (stat block moved after an update? "
+              "or the run is paused / not started)")
     verify_player(h)
     memscan.k32.CloseHandle(h)
 

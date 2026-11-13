@@ -77,7 +77,7 @@ class FakeMemory:
 
 
 def stat_block(**over):
-    """A 1036-layout stat block, early-run values (zero armor, regen and luck)."""
+    """A stat block (offsets.STAT), early-run values (zero armor, regen and luck)."""
     vals = dict(hp=1200.0, dmg=1.5, cd=0.9, crit=0.1, cm=2.0, spd=1.1, pick=5.0, xp=1.2,
                 arm=0.0, x36=0.6, reg=0.0, area=1.0, luck=0.0, gold=1.0)
     vals.update(over)
@@ -159,7 +159,7 @@ class SweepTest(unittest.TestCase):
 
 
 def two_sweep_locate(h):
-    """player.locate_ranked as it was up to v1118: a HUD sweep (game.read_hud,
+    """player.locate_ranked as it used to be: a HUD sweep (game.read_hud,
     no watch), then a fingerprint sweep. The reference for the merged one."""
     frames = []
     for addr, raw in memscan.iter_chunks(h, overlap=game.HUD_SPAN):
@@ -312,7 +312,7 @@ class HudTest(unittest.TestCase):
                 % (t, level, gold, kills)).ljust(200, b"\0")
 
     def test_live_run_beats_a_longer_earlier_run(self):
-        # v1118, many runs in one session: a level-49 frame at 951 s lingered and
+        # many runs in one session: a level-49 frame at 951 s lingered and
         # outranked the current 116 s run on time
         mem = FakeMemory()
         base = mem.add(0x40000, SMALL_CHUNK)
@@ -388,7 +388,7 @@ class PlayerTest(unittest.TestCase):
         self.assertEqual(info["kills"], 640)
 
     def test_locate_prefers_the_candidate_that_agrees_with_the_hud(self):
-        # v1118: a stray block passed the loose gold gate (level 1, max hp 98,
+        # seen: a stray block passed the loose gold gate (level 1, max hp 98,
         # kills garbage) and won only because it sat at a lower address.
         mem = FakeMemory()
         heap = mem.add(0x100000, 8 * SMALL_CHUNK)
@@ -406,7 +406,7 @@ class PlayerTest(unittest.TestCase):
         self.assertLessEqual(player.hud_score(mem._read(None, decoy, player.OBJ_SIZE), info), 1)
 
     def test_tie_goes_to_the_one_that_moves(self):
-        # v1118, run start: a frozen copy with the same opening numbers sat below
+        # run start: a frozen copy with the same opening numbers sat below
         # the hero, scored the same, and won the tie by address.
         mem = FakeMemory()
         heap = mem.add(0x100000, 8 * SMALL_CHUNK)
@@ -461,25 +461,18 @@ class PlayerTest(unittest.TestCase):
 
 
 class VerifyLayoutTest(unittest.TestCase):
-    def test_newest_layout_that_fits_wins(self):
+    def test_current_layout_finds_the_block_a_moved_one_does_not(self):
         mem = FakeMemory()
         base = mem.add(0x10000, 2 * SMALL_CHUNK)
         blk = base + SMALL_CHUNK - 16
         mem.put(blk, stat_block(luck=0.3, gold=1.25, area=1.1, arm=0.05))
         line = dict(hp=1200.0, cm=2.0, arm=0.05, area=1.1, luck=0.3, gold=1.25)
+        moved = dict(offsets.STAT, reg=36, area=40, luck=44, gold=48)     # fields shifted 4 bytes
         with mem.patch():
-            hits = {name: verify_layout.find_struct(None, line, lay)
-                    for name, lay in verify_layout.LAYOUTS.items()}
-        self.assertEqual(hits["v0.2.0-1036"], [blk])
-        self.assertEqual(hits["v0.2.0-977"], [])
+            self.assertEqual(verify_layout.find_struct(None, line, offsets.STAT), [blk])
+            self.assertEqual(verify_layout.find_struct(None, line, moved), [])
 
-    def test_same_layouts_are_swept_once(self):
-        groups = verify_layout.distinct_layouts()
-        self.assertEqual(len(groups), 2)
-        self.assertEqual(groups[0][0], ["v0.2.0-1127", "v0.2.0-1118", "v0.2.0-1115",
-                                        "v0.2.0-1039", "v0.2.0-1036", "v0.2.0-1033"])
-        self.assertEqual(groups[1][0], ["v0.2.0-977"])
-        self.assertEqual(sum(len(n) for n, _l in groups), len(offsets.STAT_LAYOUTS))
+    def test_main_checks_the_current_layout_once(self):
         line = dict(hp=1200.0, cm=2.0, arm=0.05, area=1.1, luck=0.3, gold=1.25)
         ctx = np.frombuffer(stat_block(luck=0.3, gold=1.25, area=1.1, arm=0.05), dtype=np.float32)
 
@@ -495,12 +488,12 @@ class VerifyLayoutTest(unittest.TestCase):
                     contextlib.redirect_stdout(out):
                 verify_layout.main()
             return fs.call_count, out.getvalue()
-        sweeps, _text = run([])
-        self.assertEqual(sweeps, 2)                               # was one per version: 7
+        sweeps, text = run([])
+        self.assertEqual(sweeps, 1)
+        self.assertIn("no struct matched offsets.STAT", text)
         sweeps, text = run([0x1000])
         self.assertEqual(sweeps, 1)
-        self.assertIn("layout that fits: v0.2.0-1127 / v0.2.0-1118 / v0.2.0-1115 / "
-                      "v0.2.0-1039 / v0.2.0-1036 / v0.2.0-1033", text)
+        self.assertIn("the stat block matches offsets.STAT", text)
         self.assertIn("VERDICT: offsets still valid", text)
 
     def test_stale_line_before_a_card_pick_is_not_a_moved_field(self):
@@ -520,7 +513,7 @@ class VerifyLayoutTest(unittest.TestCase):
         self.assertEqual(ok["kills"], "OK")
         self.assertEqual(ok["level"], "OK")
         self.assertEqual(ok["chest"], "OK")
-        # what v1039 looked like through the old kills offset: garbage
+        # what a moved kills offset reads: garbage
         moved = {f: v for f, _m, _r, v in verify_layout.check_player(
             player_object(level=16, gold=399, kills=-696905680, rerolls=5), hud)}
         self.assertEqual(moved["kills"], "MISMATCH")
@@ -540,16 +533,10 @@ class VerifyLayoutTest(unittest.TestCase):
 
 class OffsetsTest(unittest.TestCase):
     def test_tables_agree(self):
-        self.assertIs(offsets.STAT, offsets.STAT_LAYOUTS[offsets.GAME_VERSION])
         self.assertLessEqual(set(offsets.STAT_RANGES), set(offsets.STAT))
         self.assertLessEqual(set(offsets.PLAYER_FINGERPRINT), set(offsets.STAT_RANGES))
         self.assertTrue(set(offsets.STAT_TAIL).isdisjoint(offsets.STAT))
         self.assertLessEqual(offsets.PLAYER_UNVERIFIED, set(offsets.PLAYER))
-
-    def test_current_version_is_tried_first(self):
-        # verify_layout.py reports the FIRST layout that fits; identical layouts
-        # (1118 == 1115 == 1039 == 1036) must name the build we actually target.
-        self.assertEqual(next(iter(offsets.STAT_LAYOUTS)), offsets.GAME_VERSION)
 
     def test_matches_docs(self):
         # docs/OFFSETS.md: object + 0x5F4 = stat block, luck @ 0x624, gold mult @ 0x628
@@ -694,7 +681,7 @@ class SessionTest(unittest.TestCase):
             self.s.relocate()                               # never read, no HUD frame
 
     def test_tail_fields_and_integer_targets(self):
-        # v1118 pane: +56 is 目标数 (i32), +60 回响, +64 击杀治疗, +68 增益强度, +76 持续伤害急速
+        # the pane: +56 is 目标数 (i32), +60 回响, +64 击杀治疗, +68 增益强度, +76 持续伤害急速
         self.assertEqual(self.s.write("stat", "targets", "7"), 7)
         raw = self.mem._read(None, self.obj + offsets.PLAYER_STAT_BASE + 56, 4)
         self.assertEqual(struct.unpack("<i", raw)[0], 7)
@@ -724,7 +711,7 @@ class SessionTest(unittest.TestCase):
         return struct.unpack("<B3xf", self.mem._read(None, heap + 8 * i, 8))
 
     def test_own_entry_goes_into_a_spare_slot(self):
-        # v1118: 7 talents, capacity 8 -> appended (0x16, 0.5) showed 荆棘 50%
+        # 7 talents, capacity 8 -> appended (0x16, 0.5) showed 荆棘 50%
         heap = self._effect_list([(0x05, 0.1), (0x16, 0.3)], cap=4)
         self.s.pin("effect", "thorns", 0.77)
         self.assertEqual(self._list_len(), 3)
@@ -742,7 +729,7 @@ class SessionTest(unittest.TestCase):
         self.assertAlmostEqual(self.s.read()[("effect", "thorns")], 0.3, places=5)
 
     def test_luck_lock_also_goes_into_the_talent_list(self):
-        # v1127: the rebuild after a card pick deals the next hand in the same frame;
+        # the rebuild after a card pick deals the next hand in the same frame;
         # only an entry the rebuild sums (tag 0x0c) is there in time
         heap = self._effect_list([(0x05, 0.1), (0x0c, 0.2)], cap=4)
         self.s.pin("stat", "luck", 10)
@@ -970,7 +957,7 @@ class SessionTest(unittest.TestCase):
         self.assertAlmostEqual(self.s.read()[("effect", "lifesteal")], 0.25, places=5)
 
     def test_lives_and_dot_stacks(self):
-        # v1118 stats-line code: lives at block +0x60, stacks shown = min([+0x48], 3) + 1
+        # stats-line code: lives at block +0x60, stacks shown = min([+0x48], 3) + 1
         self.s.write("stat", "lives", 3)
         self.s.write("stat", "dots", session.parse("dots", "4"))  # 4 stacks typed
         v = self.s.read()
@@ -1182,7 +1169,7 @@ class ExeLookupTest(unittest.TestCase):
 
 class ScanStoresTest(unittest.TestCase):
     def test_movss_rsi_with_and_without_rex(self):
-        # v1127 stores xp from xmm13: F3 44 0F 11 AE 9C 06 00 00
+        # the game stores xp from xmm13: F3 44 0F 11 AE 9C 06 00 00
         for code in ("f30f11ae9c060000", "f3440f11ae9c060000", "f3460f11ae9c060000"):
             self.assertEqual(scan_stores.movss_stores(bytes.fromhex(code)), [(0, 0x69C)], code)
         for code in ("f3410f11ae9c060000",      # REX.B: [r14 + disp], not rsi

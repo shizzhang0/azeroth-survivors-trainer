@@ -2,17 +2,17 @@
 
 The run timer is the HUD's "time", and boss arrivals (8:00, 14:00) are scheduled on
 it. Combat, cooldowns and movement keep their own speed (Bevy's virtual clock would
-speed all of that up too: docs/OFFSETS.md). v1127: at 4x the 8:00
-boss came after 2 real minutes.
+speed all of that up too: docs/OFFSETS.md). At 4x the 8:00 boss comes after 2 real
+minutes.
 
-Where the timer is: v1127 keeps it in the player object (offsets.RUN_TIME), so a
+Where the timer is: the game keeps it in the player object (offsets.RUN_TIME), so a
 Turbo given the hero's address uses that at once. If it doesn't look like the timer
 there (another game version), it is searched for, in memory only:
   1. read the HUD run time;
   2. sweep memory for f32 / f64 / Duration slots about that value (a Duration is
      u64 seconds + u32 nanoseconds, what a Bevy Stopwatch holds), sweep again per
      chunk and keep those that grew with wall time, then recheck them one by one;
-  3. dozens of copies follow the timer (v1127: 54). Add a couple of seconds to each
+  3. dozens of copies follow the timer (54 in one run). Add a couple of seconds to each
      candidate alone and take it back off: the master keeps the write and drags the
      copies along.
 
