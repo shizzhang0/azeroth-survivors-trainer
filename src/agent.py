@@ -50,7 +50,11 @@ def handle(session, ready, cmd, arg1, arg2):
         if cmd == mb.UNLOCK_ALL:
             for key in session.pinned():
                 session.pin(*key, None)
+            session.set_keep_full(False)
             return mb.OK, "unlock all"
+        if cmd == mb.KEEP_FULL:
+            on = session.set_keep_full(arg2)
+            return mb.OK, "锁满血 开" if on else "锁满血 关"
         if cmd == mb.TURBO:
             v = session.set_turbo(arg2)
             return mb.OK, f"极速模式 {v:g}x" if v > 1 else "极速模式 关"
@@ -282,6 +286,7 @@ class Agent:
         for i, (kind, name, *_rest) in enumerate(FIELDS):
             box.set(mb.VALUES + i, vals[(kind, name)])
             box.set(mb.LOCKED + i, 1 if (kind, name) in pinned else 0)
+        box.set(mb.FULL_LOCKED, 1 if self.session.keep_full else 0)
 
     def heartbeat(self):
         self.beat += 1
