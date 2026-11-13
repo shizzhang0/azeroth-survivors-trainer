@@ -51,10 +51,10 @@ class ProtocolAgreementTest(unittest.TestCase):
         src = lua_source()
         slots = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local SLOT = \{(.*?)\};", src, re.S).group(1)))
         for name in ("REQ", "CMD", "ARG1", "ARG2", "ACK", "RESULT", "HEARTBEAT", "STATE", "LUA_BEAT",
-                     "VALUES", "LOCKED", "TURBO_SPEED", "TURBO_STATE", "TURBO_TIME", "SIZE"):
+                     "VALUES", "LOCKED", "TURBO_SPEED", "TURBO_STATE", "TURBO_TIME", "FULL_LOCKED", "SIZE"):
             self.assertEqual(int(slots[name]), getattr(mb, name), name)
         cmds = dict(re.findall(r"(\w+) = (\d+)", re.search(r"local CMD = \{(.*?)\};", src, re.S).group(1)))
-        for name in ("WRITE", "LOCK", "UNLOCK", "HEAL", "UNLOCK_ALL", "RELOCATE", "TURBO"):
+        for name in ("WRITE", "LOCK", "UNLOCK", "HEAL", "UNLOCK_ALL", "RELOCATE", "TURBO", "KEEP_FULL"):
             self.assertEqual(int(cmds[name]), getattr(mb, name), name)
         magics = [float(m) for m in re.findall(r'AZSRemote_MB\[\d\] = tonumber\("([-\d.]+)"\);', src)]
         self.assertEqual(tuple(magics), mb.MAGIC[:2])
@@ -267,6 +267,11 @@ class FakeSession:
         self.writes = []
         self.values = {(k, n): 0.0 for k, n, *_ in FIELDS}
         self.turbo = (1.0, "off", None, "")
+        self.keep_full = False
+
+    def set_keep_full(self, on):
+        self.keep_full = bool(on)
+        return self.keep_full
 
     def set_turbo(self, speed):
         speed = float(speed)
@@ -507,6 +512,20 @@ class HandleTest(unittest.TestCase):
         self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 4), (mb.OK, "极速模式 4x"))
         self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 1), (mb.OK, "极速模式 关"))
         self.assertEqual(agent.handle(s, True, mb.TURBO, 0, 99)[0], mb.FAILED)
+
+    def test_keep_full_on_off_and_unlock_all(self):
+        s = FakeSession()
+        self.assertEqual(agent.handle(s, False, mb.KEEP_FULL, 0, 1)[0], mb.NOT_READY)
+        self.assertEqual(agent.handle(s, True, mb.KEEP_FULL, 0, 1), (mb.OK, "锁满血 开"))
+        self.assertTrue(s.keep_full)
+        self.assertEqual(agent.handle(s, True, mb.UNLOCK_ALL, 0, 0)[0], mb.OK)
+        self.assertFalse(s.keep_full)                       # 全部解锁 takes 锁满血 too
+        agent.handle(s, True, mb.KEEP_FULL, 0, 1)
+        self.assertEqual(agent.handle(s, True, mb.KEEP_FULL, 0, 0), (mb.OK, "锁满血 关"))
+        self.assertFalse(s.keep_full)
+
+    def test_no_current_health_row(self):
+        self.assertNotIn(("player", "hp"), [f[:2] for f in FIELDS])   # 锁满血 replaces it
 
     def test_turbo_speed_carries_over_to_the_next_runs_session(self):
         made = []
@@ -772,6 +791,24 @@ class AddonEndToEndTest(unittest.TestCase):
         self.assertTrue(dot().endswith("dot_green"))                   # ready
         g.Fire(btn, "OnClick")
         self.assertTrue(g.AZSRemoteFrame._shown)
+
+    def test_keep_full_box_goes_round_trip(self):
+        self.g.SlashCmdList["AZSREMOTE"]()
+        cb = self.g.AZSRemoteKeepFull
+        cb._checked = 1
+        self.g.Fire(cb, "OnClick")
+        self.tick()
+        self.assertEqual((self.mb[mb.CMD], self.mb[mb.ARG2]), (mb.KEEP_FULL, 1))
+        self.agent.serve_once()
+        self.assertTrue(self.session.keep_full)
+        self.agent.heartbeat()
+        self.agent.snapshot()
+        self.assertEqual(self.mb[mb.FULL_LOCKED], 1)
+        self.session.keep_full = False                      # turned off elsewhere (全部解锁)
+        self.agent.heartbeat()
+        self.agent.snapshot()
+        self.tick()
+        self.assertIsNone(self.L.eval("rawget")(cb, "_checked"))   # the box follows the agent
 
     def test_requests_queue_one_at_a_time(self):
         self.g.Fire(self.g.AZSRemoteHeal, "OnClick")

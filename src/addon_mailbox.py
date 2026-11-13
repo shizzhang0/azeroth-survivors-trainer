@@ -27,25 +27,27 @@ HEARTBEAT = 10           # Python: bumped about twice a second while connected
 STATE = 11               # Python: what the agent is doing
 LUA_BEAT = 12            # Lua: bumped ~10x a second while the addon runs
 VALUES = 13              # Python: current value of field i at VALUES + i - 1
-N_FIELDS = 30
+N_FIELDS = 29
 LOCKED = VALUES + N_FIELDS   # Python: 1 if field i is locked, at LOCKED + i - 1
 TURBO_SPEED = LOCKED + N_FIELDS  # Python: 极速模式 speed wanted (1 = off)
 TURBO_STATE = TURBO_SPEED + 1    # Python: TURBO_* below
 TURBO_TIME = TURBO_SPEED + 2     # Python: run timer in seconds, -1 if not known
-SIZE = TURBO_TIME
+FULL_LOCKED = TURBO_SPEED + 3    # Python: 1 while 锁满血 is on
+SIZE = FULL_LOCKED
 
 # Made at runtime in Lua (tonumber / arithmetic), so they exist only in the table.
 # The third one is the layout tag: 1234000 + 1000 * PROTOCOL + field count. An
 # addon of another version (a run started before an update) has another tag and
 # maybe a shorter array: we must not write into it. Bump PROTOCOL with any slot
 # change (here and in the Lua file).
-PROTOCOL = 6
+PROTOCOL = 7
 LAYOUT_BASE = 1234000.0
 MAGIC = (918273.645, -556677.889, LAYOUT_BASE + 1000 * PROTOCOL + N_FIELDS)
 LUA_SILENT = 5.0         # seconds without LUA_BEAT moving: that array is dead
 
 # commands (CMD)
-WRITE, LOCK, UNLOCK, HEAL, UNLOCK_ALL, RELOCATE, TURBO = 1, 2, 3, 4, 5, 6, 7   # TURBO: ARG2 = speed
+WRITE, LOCK, UNLOCK, HEAL, UNLOCK_ALL, RELOCATE, TURBO, KEEP_FULL = 1, 2, 3, 4, 5, 6, 7, 8
+# TURBO: ARG2 = speed. KEEP_FULL (锁满血): ARG2 = 1 on, 0 off
 # results (RESULT)
 OK, NOT_READY, BAD_INPUT, FAILED = 0, 1, 2, 3
 # states (STATE)

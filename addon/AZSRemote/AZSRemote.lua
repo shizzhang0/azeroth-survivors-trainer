@@ -8,11 +8,12 @@
 -- Slot numbers and the field list must match src/addon_mailbox.py and
 -- src/session.py FIELDS — tests/test_offline.py checks both.
 
-local PROTOCOL = 6;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
+local PROTOCOL = 7;      -- bump with any slot or field-order change, as in src/addon_mailbox.py
 local SLOT = { REQ = 4, CMD = 5, ARG1 = 6, ARG2 = 7, ACK = 8, RESULT = 9,
-	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 43,
-	TURBO_SPEED = 73, TURBO_STATE = 74, TURBO_TIME = 75, SIZE = 75 };
-local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6, TURBO = 7 };
+	HEARTBEAT = 10, STATE = 11, LUA_BEAT = 12, VALUES = 13, LOCKED = 42,
+	TURBO_SPEED = 71, TURBO_STATE = 72, TURBO_TIME = 73, FULL_LOCKED = 74, SIZE = 74 };
+local CMD = { WRITE = 1, LOCK = 2, UNLOCK = 3, HEAL = 4, UNLOCK_ALL = 5, RELOCATE = 6, TURBO = 7,
+	KEEP_FULL = 8 };
 
 -- kind, name, label, format ("i" whole number / "f" decimal), lockable, unit, group
 -- Labels, order and groups follow the game's character pane; unit says how the
@@ -42,7 +43,6 @@ local FIELDS = {
 	{ "stat", "dots", "持续伤害层数", "i", true, "dots", "冒险属性" },
 	{ "stat", "doth", "持续伤害急速", "f", true, "+%", "冒险属性" },
 	{ "player", "gold", "金币数量", "i", false, "int", "状态" },
-	{ "player", "hp", "当前血量", "f", true, "num", "状态" },
 	{ "player", "level", "等级", "i", false, "int", "状态" },
 	{ "player", "xp", "当前经验", "i", false, "int", "状态" },
 	{ "player", "kills", "击杀", "i", false, "int", "状态" },
@@ -347,6 +347,18 @@ end
 button("AZSRemoteRelocate", "重新定位", 0, function() send(CMD.RELOCATE); end);
 button("AZSRemoteUnlock", "全部解锁", 94, function() send(CMD.UNLOCK_ALL); end);
 button("AZSRemoteHeal", "回满血", 188, function() send(CMD.HEAL); end);
+-- 锁满血, left of 回满血: health kept at 生命值 (raise that with a lock for more)
+local full = CreateFrame("CheckButton", "AZSRemoteKeepFull", panel, "UICheckButtonTemplate");
+full:SetWidth(22);
+full:SetHeight(22);
+full:SetPoint("TOPLEFT", panel, "TOPLEFT", RIGHT + COL_W - 188 - 88 - 72, y);
+local fullText = getglobal(full:GetName() .. "Text");
+if ( fullText ) then
+	fullText:SetText("锁满血");
+end
+full:SetScript("OnClick", function()
+	send(CMD.KEEP_FULL, 0, this:GetChecked() and 1 or 0);
+end);
 panel:SetHeight(-y + 22 + 22);           -- the button line, then the border
 
 -- --- floating toggle button ----------------------------------------------------
@@ -527,6 +539,9 @@ driver:SetScript("OnUpdate", function()
 			if ( row.lock and not busy ) then
 				row.lock:SetChecked(MB[SLOT.LOCKED + i - 1] == 1 and 1 or nil);
 			end
+		end
+		if ( not busy ) then
+			full:SetChecked(MB[SLOT.FULL_LOCKED] == 1 and 1 or nil);
 		end
 	end
 end);

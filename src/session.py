@@ -60,7 +60,6 @@ FIELDS = [
     ("stat", "dots", "持续伤害层数", "<i", True, "dots", "冒险属性"),
     ("stat", "doth", "持续伤害急速", "<f", True, "+%", "冒险属性"),
     ("player", "gold", "金币数量", "<i", False, "int", "状态"),
-    ("player", "hp", "当前血量", "<f", True, "num", "状态"),
     ("player", "level", "等级", "<i", False, "int", "状态"),    # locking these loops level-ups
     ("player", "xp", "当前经验", "<i", False, "int", "状态"),
     ("player", "kills", "击杀", "<i", False, "int", "状态"),
@@ -182,6 +181,7 @@ class Session:
         self._moved = None              # the talent list on our page: page and its old (cap, ptr, len)
         self._effect_lock = threading.RLock()
         self.turbo = None               # 极速模式 (turbo.Turbo), made by locate()
+        self.keep_full = False          # 锁满血: health held at max health (see tick)
 
     # --- connect ------------------------------------------------------------
     def locate(self):
@@ -225,6 +225,7 @@ class Session:
         self._thread = None
         with self._lock:
             self._pins.clear()
+        self.keep_full = False
         if self.h and self.base is not None:
             for name in set(self._own) | set(self._orig):
                 self._clear_effect(name)        # locks stop: so do our list entries
@@ -516,13 +517,26 @@ class Session:
         return v
 
     def heal(self):
+        """Health up to max health (生命值) once; returns it."""
         if not self.connected:
             raise SessionError("还没定位到游戏")
         raw = memscan.read(self.h, self.base + player.MAXHP, 4)
-        if not raw:
+        if not raw or len(raw) != 4:
             raise SessionError("读不到最大生命（游戏已退出？）")
         mx = struct.unpack("<f", raw)[0]
-        return self.write("player", "hp", mx)
+        if not memscan.write(self.h, self.base + PLAYER["hp"][0], raw):
+            raise SessionError("写入血量失败（游戏已退出？）")
+        return mx
+
+    def set_keep_full(self, on):
+        """锁满血: keep health at max health. The game clamps health to max, so
+        locking a number would be undone by a smaller max; this follows max
+        instead (raise it with a 生命值 lock). Fills up at once when turned on."""
+        on = bool(on)
+        if on:
+            self.heal()
+        self.keep_full = on
+        return on
 
     # --- lock ---------------------------------------------------------------
     def pin(self, kind, name, value):
@@ -609,6 +623,11 @@ class Session:
                 memscan.write(self.h, self.base + offset(k, n), data)
                 if self._backed(k, n):
                     self._back(k, n, struct.unpack(SPEC[(k, n)][1], data)[0])
+        if self.keep_full:                  # after the locks: a 生命值 lock lands first
+            try:
+                self.heal()
+            except SessionError:
+                pass                        # gone this tick: alive() catches it next
         return 0
 
     def _run(self):

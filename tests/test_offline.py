@@ -605,6 +605,41 @@ class SessionTest(unittest.TestCase):
         self.s.tick()
         self.assertAlmostEqual(self.s.read()[("stat", "luck")], 3.0)
 
+    def _health(self):
+        raw = self.mem._read(None, self.obj + offsets.PLAYER["hp"][0], 4)
+        return struct.unpack("<f", raw)[0]
+
+    def test_heal_fills_up_to_max_health(self):
+        self.mem.put(self.obj, player_object(hp=120.0, maxhp=447.0))
+        self.assertEqual(self.s.heal(), 447.0)
+        self.assertEqual(self._health(), 447.0)
+
+    def test_keep_full_holds_health_at_max(self):
+        self.mem.put(self.obj, player_object(hp=120.0, maxhp=447.0))
+        self.assertTrue(self.s.set_keep_full(True))
+        self.assertEqual(self._health(), 447.0)                  # at once
+        self.mem.put(self.obj, player_object(hp=90.0, maxhp=447.0))   # took a hit
+        self.s.tick()
+        self.assertEqual(self._health(), 447.0)
+        self.s.set_keep_full(False)
+        self.mem.put(self.obj, player_object(hp=90.0, maxhp=447.0))
+        self.s.tick()
+        self.assertEqual(self._health(), 90.0)
+
+    def test_keep_full_follows_a_max_health_lock(self):
+        self.mem.put(self.obj, player_object(hp=120.0, maxhp=447.0))
+        self.s.set_keep_full(True)
+        self.s.pin("stat", "hp", 5000)
+        self.mem.put(self.obj, player_object(hp=447.0, maxhp=447.0))  # level-up rebuild
+        self.s.tick()
+        self.assertEqual(self._health(), 5000.0)
+
+    def test_keep_full_needs_a_game(self):
+        s = session.Session()
+        with self.assertRaises(session.SessionError):
+            s.set_keep_full(True)
+        self.assertFalse(s.keep_full)
+
     def test_effect_lock_writes_once(self):
         self._effect_list([(0x16, 0.3)], cap=4)
         with mock.patch.object(self.s, "_write_effect", wraps=self.s._write_effect) as w:

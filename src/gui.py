@@ -6,7 +6,8 @@ Click 定位游戏 inside a run, wait for the sweep (30-90 s), then:
   * 属性 (stat cache): type a value, tick 锁定 (or press Enter) — the game
     recomputes these every 1-3 s, so only a lock sticks.
   * 状态 (run state): type a value, click 写入 (or press Enter). Tick 锁定 to
-    keep it there (e.g. chest price 1, rerolls 99).
+    keep it there (e.g. chest price 1, rerolls 99). 回满血 fills health up to
+    生命值 once; 锁满血 keeps it there (raise 生命值 with a lock for more).
   * 极速模式: the run timer (what bosses go by) at 2x / 4x / 8x; combat keeps its
     speed. The timer sits in the player object (turbo.py).
   * 存档 (save file, via save.py): perk resets and marks. Only writable while
@@ -204,8 +205,14 @@ class App:
                 f, r = cols[group]
                 self.add_row(f, r, kind, name, label, unit, lockable)
                 cols[group][1] += 1
-        ttk.Button(state_body, text="回满血", style="Small.TButton", command=self.heal).grid(
-            row=prow, column=0, sticky="w", pady=(10, 0))
+        hp_line = ttk.Frame(state_body, style="Body.TFrame")
+        hp_line.grid(row=prow, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        heal = ttk.Button(hp_line, text="回满血", style="Small.TButton", command=self.heal)
+        heal.pack(side="left")
+        self.full_var = tk.BooleanVar(value=False)      # 锁满血: health kept at 生命值
+        full = ttk.Checkbutton(hp_line, text="锁满血", variable=self.full_var, command=self.toggle_full)
+        full.pack(side="left", padx=(12, 0))
+        self.hp_widgets = [heal, full]
 
         tb, _h, tb_body = card(right, "极速模式")
         tb.pack(fill="x", pady=(12, 0))
@@ -265,7 +272,7 @@ class App:
         for row in self.rows.values():
             for w in row["widgets"]:
                 w.state(["!disabled"] if on else ["disabled"])
-        for w in self.turbo_widgets:
+        for w in self.turbo_widgets + self.hp_widgets:
             w.state(["!disabled"] if on else ["disabled"])
 
     def connected_status(self):
@@ -434,11 +441,21 @@ class App:
         except SessionError as e:
             self.say(str(e), error=True)
 
+    def toggle_full(self):
+        try:
+            on = self.session.set_keep_full(self.full_var.get())
+            self.say("已锁满血（血量一直等于生命值）" if on else "已解锁满血")
+        except SessionError as e:
+            self.full_var.set(False)
+            self.say(str(e), error=True)
+
     def unlock_all(self, quiet=False):
         for key, row in self.rows.items():
             if row["lock"].get():
                 row["lock"].set(False)
                 self.session.pin(*key, None)
+        self.full_var.set(False)
+        self.session.set_keep_full(False)
         if not quiet:
             self.say("全部解锁")
 
