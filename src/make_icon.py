@@ -8,6 +8,7 @@ being mistaken for it. Writes:
   src/icon.ico                     window / taskbar icon of gui.py (16-256 px)
   addon/AZSRemote/icon.tga         the in-game AZS button (64 x 64, 32-bit, uncompressed)
   addon/AZSRemote/dot_*.tga        its state dot: red / yellow / green (16 x 16)
+  docs/icon.png                    for the README (256 x 256)
 Pillow is only needed to re-make them, not to run the trainer.
 """
 import math
@@ -20,6 +21,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 ICO = os.path.join(ROOT, "src", "icon.ico")
 TGA = os.path.join(ROOT, "addon", "AZSRemote", "icon.tga")
+PNG = os.path.join(ROOT, "docs", "icon.png")
 DOTS = {"red": (255, 85, 85), "yellow": (255, 209, 0), "green": (85, 255, 85)}   # the panel's colours
 
 GOLD_HI, GOLD_MID, GOLD_LO = (255, 244, 170), (250, 192, 48), (176, 104, 8)
@@ -174,6 +176,8 @@ def main():
     frames = [draw_small(s) if s <= 32 else draw(s) for s in sizes]
     frames[-1].save(ICO, format="ICO", sizes=[(s, s) for s in sizes], append_images=frames[:-1])
     write_tga(draw(64), TGA)
+    draw(256).save(PNG, optimize=True)
+    print(f"wrote {os.path.normpath(PNG)}")
     for name, rgb in DOTS.items():
         path = os.path.join(os.path.dirname(TGA), f"dot_{name}.tga")
         write_tga(dot(rgb), path)
