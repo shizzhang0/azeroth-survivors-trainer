@@ -85,7 +85,7 @@ F3 [40/42/44/46] 0F 11 <modrm 0x86/8E/96/9E/A6/AE/B6/BE> <disp32>
 
 ## 极速模式
 
-极速模式用玩家对象里的 `offsets.RUN_TIME`（`+0xFC4`）。游戏更新后那里不再是局内计时时，
+极速模式用玩家对象里的 `offsets.RUN_TIME`（`+0xFDC`）。游戏更新后那里不再是局内计时时，
 [`src/turbo.py`](../src/turbo.py) 会自己发现（计时停住超过 60 秒、和 HUD 对不上）并改为按 HUD 时间在内存里找，所以照样能用，只是第一次打开要等约 1 分钟。
 要重新定这个偏移，进一局正常战斗，跑：
 
@@ -97,6 +97,11 @@ uv run --no-project --with numpy python src/find_runtimer.py --test
 再用 `uv run --no-project --with numpy python src/player.py --show` 看玩家对象的地址（`player object @ 0x...`），两者相减就是新的 `RUN_TIME`。找不到时看：
 - 计时的类型变了：`turbo.KINDS` 目前试 f32、f64、Duration 三种；
 - 拷贝变少了：`probe()` 提前停下的条件是“带着至少三分之一的候选一起跳”。
+
+更快的办法是直接看 exe（不用进游戏）：HUD 的键名 `"time"` 在 `.rdata` 里，引用它的函数就是写 HUD 的那个，
+里面 `movss xmm9, [rax + X]` 读的就是局内计时，X − 0x6C 就是 `RUN_TIME`（代码里的结构体比我们的基址早 0x6C，
+以属性块写回点为准）。有一次更新就是这样看出整体后移了 0x18：计时、刷怪预算、击杀压力、宝箱价格、放逐都跟着移，
+击杀、重抽、等级、血量、金币没动。刷怪那两个值在刷怪函数里，`预算 += 帧时长 × 速率` 的写回点就是 `SPAWN_BUDGET` + 0x6C。
 
 **注意**：`WOW_FIXED_DT` 环境变量看起来像速度开关，但实测只有 1.00x——exe 自己的日志写着它钉的是 **animation clock**（动画时钟），不是游戏时钟。
 改 Bevy 的 `Time<Virtual>.relative_speed` 能让整个游戏变速，但局内计时不跟着变，没采用（见 [OFFSETS.md](OFFSETS.md) 第三节）。

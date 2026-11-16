@@ -106,29 +106,32 @@ PLAYER = {
     "gold":     (0x5A4, "<i"),   # coin amount
     "rerolls":  (0x658, "<i"),   # watched 5 -> 4 on a real reroll
     "kills":    (0xA3C, "<i"),   # matched the HUD 222 -> 268
-    "banishes": (0x1050, "<i"),  # watched 3 -> 2 on a real banish, the only slot
+    "banishes": (0x1068, "<i"),  # watched 3 -> 2 on a real banish, the only slot
                                  # that dropped by 1
-    "chest":    (0x1024, "<i"),  # gold price of the next chest (HUD chestCost);
+    "chest":    (0x103C, "<i"),  # gold price of the next chest (HUD chestCost);
                                  # 20 -> 31 on opening one; wrote 1, HUD showed 1
 }
 
 # 极速模式: the run timer (HUD "time", what boss arrivals go by), f32 seconds in the
 # player object. Found by turbo.locate (HUD match + probe), then seen at player +
-# 0xFC4 in two runs (the second run's chest price sat at timer + 0x60).
+# 0xFC4 in two runs (the second run's chest price sat at timer + 0x60). A game update
+# put 0x18 bytes in before it: the timer and every field after it moved by
+# 0x18 (seen in the code: the HUD writer reads the timer at code +0x1048, not +0x1030;
+# kills, rerolls, level, health, gold stayed put).
 # Not a FIELDS entry: turbo.Turbo stretches it, nobody types a value into it.
-RUN_TIME = 0xFC4
+RUN_TIME = 0xFDC
 
 # The trickle of single monsters, read from the game code (the spawner reads these
-# at code offsets +0x106C / +0x1070: the code's struct starts 0x6C before ours, the
-# run timer being code +0x1030). Each frame:
+# at code offsets +0x1084 / +0x1088: the code's struct starts 0x6C before ours, the
+# run timer being code +0x1048). Each frame:
 #   pressure *= exp(-dt / 12); every non-elite kill adds that enemy's cost
 #   R = (0.025 m^2 + 0.32 m + 0.9) * 0.6, m = run minutes
 #   budget += dt * R * clamp(1.25 * pressure / 12 / R, 1, 3)
 #   while budget >= 1 (8 a frame at most): spawn a monster, budget -= its cost
 # dt is the frame's real time, so this doesn't follow the run timer by itself: turbo
 # keeps pressure in run time and grows the budget N x (turbo.Spawns).
-SPAWN_BUDGET = 0x1000          # f32
-KILL_PRESSURE = 0x1004         # f32
+SPAWN_BUDGET = 0x1018          # f32
+KILL_PRESSURE = 0x101C         # f32
 
 # Values the game itself never goes past: the level cap is 120 (seen in game); a
 # higher level could send its experience-table lookup out of bounds.
